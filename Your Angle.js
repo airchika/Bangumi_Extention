@@ -1328,10 +1328,10 @@
             const _nick2 = cur_user1.nickname || cur_user1.username
             const _maxNickWidth = Math.ceil(Math.max(_tmpCanvas.measureText(_nick1).width, _tmpCanvas.measureText(_nick2).width)) + 'px'
             const collectionRelationBar = `
-              <div class="collection-relation-bar" style="display: grid; grid-template-columns: repeat(3, 1fr); width: 320px; height: 42px; border-radius: 4px; overflow: hidden; color: #fff; font-size: 0.85em; font-weight: bold; text-shadow: 0 0 2px #000;">
-                <div style="background:#04f; display:grid; place-items:center;">A 收藏 ${syncCollnums[2]}</div>
-                <div style="background:#7a3; display:grid; place-items:center; line-height:1.2;"><span>共同 ${syncCollnums[1]}</span><span>共同打分 ${syncCollnums[0]}</span></div>
-                <div style="background:#f40; display:grid; place-items:center;">B 收藏 ${syncCollnums[3]}</div>
+              <div class="collection-relation-bar" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 320px; height: 42px; color: #fff; font-size: 0.85em; font-weight: bold; text-shadow: 0 0 2px #000;">
+                <div style="background:#04f; display:grid; place-items:center; border-radius: 4px;">仅 A 收藏 ${syncCollnums[2]}</div>
+                <div style="background:#f40; display:grid; place-items:center; border-radius: 4px;"><span>共同 ${syncCollnums[1]}</span><span>共同打分 ${syncCollnums[0]}</span></div>
+                <div style="background:#04f; display:grid; place-items:center; border-radius: 4px;">仅 B 收藏 ${syncCollnums[3]}</div>
               </div>
             `
             // 类别按钮和缓存按钮
@@ -1378,7 +1378,8 @@
       </div>
     </div>
   </div>
-</div>
+  </div>
+  ${collectionRelationBar}
 
 <!-- 滑块 -->
 <div class="threshold-sliders" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px; margin-bottom: 10px; padding: 8px 0;">
@@ -1406,7 +1407,6 @@
   </div>
 </div>
 
-${collectionRelationBar}
 
         <style>
     .subject-btn, .clear-cache-btn, .filter-btn {
@@ -2352,7 +2352,7 @@ ${collectionRelationBar}
                         const prev = j > 0 ? active[j - 1] : null
                         const next = j < active.length - 1 ? active[j + 1] : null
                         if (prev && prev.color !== color) {
-                            html += `<div style="width:0;height:100%;border-left:2px solid #000;flex-shrink:0;"></div>`
+                            html += `<div style="width:0;height:100%;border-left:2px solid #ff000000;flex-shrink:0;"></div>`
                         }
                         const rL = (!prev || prev.color !== color) ? '2px' : '0'
                         const rR = (!next || next.color !== color) ? '2px' : '0'
@@ -2711,7 +2711,7 @@ ${collectionRelationBar}
     {
         const $navTabs = document.querySelector('.navTabs')
         let tabName = 'Your Angle'
-        if (开发中) tabName += '(开发中)'
+        if (开发中) tabName = '(开发中)'
         const $btn = create_element(`<li><a href="javascript:">${tabName}</a></li>`)
 
         $btn.addEventListener(
