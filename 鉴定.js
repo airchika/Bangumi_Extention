@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         鉴定
-// @homepage     https://bangumi.tv/dev/app/5445
+// @homepage     https://bangumi.tv/dev/app/5446
 // @author       https://bangumi.tv/user/air_chika
 // @match        *://bgm.tv/user/*
 // @match        *://bangumi.tv/user/*
@@ -127,33 +127,19 @@
                 }
             }
 
-            const CACHE_TTL = 7 * 24 * 60 * 60 * 1000 // 一周
-
             async function get(key) {
                 const db = await open_db()
                 const store = db.transaction(STORE).objectStore(STORE)
-                const raw = await pr(store.get(key))
+                const value = await pr(store.get(key))
                 db.close()
-                // 兼容旧格式（无 timestamp 视为过期）
-                if (!raw || typeof raw !== 'object' || !raw.timestamp) return null
-                if (Date.now() - raw.timestamp > CACHE_TTL) return null
-                return raw.data
+                return value
             }
 
             async function set(key, value) {
                 const db = await open_db()
                 const store = db.transaction(STORE, 'readwrite').objectStore(STORE)
-                store.put({ data: value, timestamp: Date.now() }, key)
+                store.put(value, key)
                 db.close()
-            }
-
-            async function get_fresh(key) {
-                const db = await open_db()
-                const store = db.transaction(STORE).objectStore(STORE)
-                const raw = await pr(store.get(key))
-                db.close()
-                if (!raw || typeof raw !== 'object' || !raw.data) return null
-                return raw.data
             }
 
             async function deleteByKey(key) {
@@ -175,7 +161,7 @@
                 return `https://api.bgm.tv/v0/users/${username}`
             }
 
-            return { create, get, set, get_fresh, deleteByKey, transCollKey, transUserKey }
+            return { create, get, set, deleteByKey, transCollKey, transUserKey }
         })()
 
         return store
@@ -209,9 +195,9 @@
             return l.concat(...ll)
         }
 
-        async function get_coll(username, force = false) {
+        async function get_coll(username) {
             const cache_key = api_cache.transCollKey(username, analyze_config.cur_subject_id)
-            let collections = force ? null : await api_cache.get(cache_key)
+            let collections = await api_cache.get(cache_key)
 
             if (!collections) {
                 try {
@@ -234,9 +220,9 @@
             return user
         }
 
-        async function get_user(username, force = false) {
+        async function get_user(username) {
             const cache_key = api_cache.transUserKey(username)
-            let user = force ? null : await api_cache.get(cache_key)
+            let user = await api_cache.get(cache_key)
 
             if (user && !isValidUserPayload(user)) {
                 await api_cache.deleteByKey(cache_key)
@@ -384,10 +370,10 @@
          * @param {string} his_id
          * @returns {Object}
          */
-        async function run(my_id, his_id, force = false) {
+        async function run(my_id, his_id) {
             const [my_collections, his_collections] = await Promise.all([
-                load_manager_async.get_coll(my_id, force),
-                load_manager_async.get_coll(his_id, force)
+                load_manager_async.get_coll(my_id),
+                load_manager_async.get_coll(his_id)
             ])
 
             const my_rate_count_map = calc_rate_count_map(my_collections)
@@ -496,16 +482,14 @@
 
     // ─── 注入分析页面 ───
 
-    async function inject_analyze_page(force = false) {
+    async function inject_analyze_page() {
         const $page = document.querySelector('.columns')
 
         if (!cur_user1 || !cur_user2) {
             visited_username = document.querySelector('#headerProfile .name small').textContent.slice(1)
             self_username = CHOBITS_USERNAME
-        }
-        if (force || !cur_user1 || !cur_user2) {
-            cur_user1 = await load_manager_async.get_user(visited_username, force)
-            cur_user2 = await load_manager_async.get_user(self_username, force)
+            cur_user1 = await load_manager_async.get_user(visited_username)
+            cur_user2 = await load_manager_async.get_user(self_username)
         }
 
         const my_id = cur_user2.username
@@ -516,7 +500,7 @@
         try {
             $page.innerHTML = `<section class="鉴定_page" style="padding: 20px;">加载中...</section>`
 
-            const result = await analyze.run(my_id, his_id, force)
+            const result = await analyze.run(my_id, his_id)
 
             // ─── 构建 UI ───
 
@@ -681,7 +665,6 @@
                     <button class="sort-tab-his" data-sort="his_hate">对方最厌恶</button>
                     <button class="sort-tab-his" data-sort="his_public_diff">对方与大众差距</button>
                     <button class="sort-tab-his" data-sort="his_niche">对方冷门高分</button>
-                    <button id="force-update-btn" style="margin-left: auto; padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
                     <label style="font-size: 0.9em; display: flex; align-items: center; gap: 6px;">
                         <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
                             <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
@@ -768,18 +751,6 @@
                 analyze_config.show_comments = e.target.checked
                 save_settings()
                 refreshList()
-            })
-
-            // 强制更新缓存
-            document.getElementById('force-update-btn').addEventListener('click', async () => {
-                const btn = document.getElementById('force-update-btn')
-                btn.textContent = '更新中...'
-                btn.disabled = true
-                try {
-                    await inject_analyze_page(true)
-                } catch (e) {
-                    alert(`更新失败: ${e.message}`)
-                }
             })
 
         } catch (e) {
