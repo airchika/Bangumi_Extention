@@ -573,9 +573,28 @@
                 </div>`
             }
 
+            // 简略图渲染（仅封面 + 悬停提示分数）
+            function render_compact_card(review) {
+                const my_rate = review.my_review ? review.my_review.rate : '—'
+                const his_rate = review.his_review ? review.his_review.rate : '—'
+                const pub_score = review.subject.score
+                const his_comment = review.his_review?.comment ? escapeHtml(review.his_review.comment) : '无'
+                const my_comment = review.my_review?.comment ? escapeHtml(review.my_review.comment) : '无'
+                return `
+                <a href="/subject/${review.subject.id}" target="_blank" class="_compact_card">
+                    <img src="${review.subject.images?.grid || ''}" loading="lazy"/>
+                    <div class="_compact_tip">
+                        我:${my_rate} 对方:${his_rate} 大众:${pub_score}<br>
+                        对方: ${his_comment}<br>
+                        我: ${my_comment}
+                    </div>
+                </a>`
+            }
+
             // 渲染列表
             function render_list(list, count) {
-                return list.slice(0, count).map(r => render_review_card(r)).join('')
+                const fn = analyze_config.show_comments ? render_review_card : render_compact_card
+                return list.slice(0, count).map(r => fn(r)).join('')
             }
 
             // 完整页面
@@ -646,6 +665,37 @@
                     height: 100%;
                     flex-shrink: 0;
                 }
+                .鉴定_page ._compact_card {
+                    position: relative;
+                    display: block;
+                }
+                .鉴定_page ._compact_card img {
+                    width: 100px;
+                    height: 140px;
+                    object-fit: cover;
+                    border-radius: 4px;
+                    display: block;
+                }
+                .鉴定_page ._compact_card:hover img { opacity: 0.7; }
+                .鉴定_page ._compact_tip {
+                    display: none;
+                    position: absolute;
+                    top: 100%;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: rgba(0,0,0,0.7);
+                    color: #fff;
+                    font-size: 14px;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    width: max-content;
+                    max-width: 360px;
+                    word-break: break-all;
+                    pointer-events: none;
+                    z-index: 1;
+                    margin-top: 2px;
+                }
+                .鉴定_page ._compact_card:hover ._compact_tip { display: block; }
                 .鉴定_page .sort-tab { padding: 8px 18px; cursor: pointer; font-size: 1.1em; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; background: transparent; }
                 .鉴定_page .sort-tab.active { background: #FE8A95; color: #fff; border-color: #FE8A95; }
                 .鉴定_page .sort-tab-his { padding: 8px 18px; cursor: pointer; font-size: 1.1em; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; background: transparent; }
@@ -675,7 +725,7 @@
                         <button id="force-update-btn" style="padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
                         <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.9em;">
                             <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
-                            吐槽
+                            详细
                         </label>
                         <select id="display-count-select" style="padding: 4px 8px; font-size: 1em;">
                             <option value="5" ${analyze_config.display_count === 5 ? 'selected' : ''}>5</option>
@@ -687,7 +737,7 @@
                     </div>
                 </div>
                 <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;"></div>
-                <div id="sort-list-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 50px 10px;">
+                <div id="sort-list-container" style="display: grid; grid-template-columns: ${analyze_config.show_comments ? 'repeat(auto-fill, minmax(450px, 1fr))' : 'repeat(auto-fill, 120px)'}; gap: ${analyze_config.show_comments ? '50px 10px' : '10px 10px'};">
                     ${render_list(result.common_love_list, analyze_config.display_count)}
                 </div>
             </main>`
@@ -729,7 +779,12 @@
             function refreshList() {
                 const count = parseInt(document.getElementById('display-count-select').value)
                 const list = sort_map[currentSort]
-                document.getElementById('sort-list-container').innerHTML = render_list(list, count)
+                const container = document.getElementById('sort-list-container')
+                container.innerHTML = render_list(list, count)
+                container.style.gridTemplateColumns = analyze_config.show_comments
+                    ? 'repeat(auto-fill, minmax(450px, 1fr))'
+                    : 'repeat(auto-fill, 120px)'
+                container.style.gap = analyze_config.show_comments ? '50px 10px' : '10px 10px'
                 $page.querySelector('.sort-count-label').textContent = `共 ${list.length} 条`
                 updateDescription()
             }
