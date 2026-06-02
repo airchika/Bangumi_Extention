@@ -195,9 +195,9 @@
             return l.concat(...ll)
         }
 
-        async function get_coll(username) {
+        async function get_coll(username, force = false) {
             const cache_key = api_cache.transCollKey(username, analyze_config.cur_subject_id)
-            let collections = await api_cache.get(cache_key)
+            let collections = force ? null : await api_cache.get(cache_key)
 
             if (!collections) {
                 try {
@@ -220,9 +220,9 @@
             return user
         }
 
-        async function get_user(username) {
+        async function get_user(username, force = false) {
             const cache_key = api_cache.transUserKey(username)
-            let user = await api_cache.get(cache_key)
+            let user = force ? null : await api_cache.get(cache_key)
 
             if (user && !isValidUserPayload(user)) {
                 await api_cache.deleteByKey(cache_key)
@@ -370,10 +370,10 @@
          * @param {string} his_id
          * @returns {Object}
          */
-        async function run(my_id, his_id) {
+        async function run(my_id, his_id, force = false) {
             const [my_collections, his_collections] = await Promise.all([
-                load_manager_async.get_coll(my_id),
-                load_manager_async.get_coll(his_id)
+                load_manager_async.get_coll(my_id, force),
+                load_manager_async.get_coll(his_id, force)
             ])
 
             const my_rate_count_map = calc_rate_count_map(my_collections)
@@ -482,14 +482,16 @@
 
     // ─── 注入分析页面 ───
 
-    async function inject_analyze_page() {
+    async function inject_analyze_page(force = false) {
         const $page = document.querySelector('.columns')
 
         if (!cur_user1 || !cur_user2) {
             visited_username = document.querySelector('#headerProfile .name small').textContent.slice(1)
             self_username = CHOBITS_USERNAME
-            cur_user1 = await load_manager_async.get_user(visited_username)
-            cur_user2 = await load_manager_async.get_user(self_username)
+        }
+        if (force || !cur_user1 || !cur_user2) {
+            cur_user1 = await load_manager_async.get_user(visited_username, force)
+            cur_user2 = await load_manager_async.get_user(self_username, force)
         }
 
         const my_id = cur_user2.username
@@ -500,7 +502,7 @@
         try {
             $page.innerHTML = `<section class="鉴定_page" style="padding: 20px;">加载中...</section>`
 
-            const result = await analyze.run(my_id, his_id)
+            const result = await analyze.run(my_id, his_id, force)
 
             // ─── 构建 UI ───
 
@@ -647,26 +649,31 @@
                 .鉴定_page .sort-tab { padding: 8px 18px; cursor: pointer; font-size: 1.1em; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; background: transparent; }
                 .鉴定_page .sort-tab.active { background: #FE8A95; color: #fff; border-color: #FE8A95; }
                 .鉴定_page .sort-tab-his { padding: 8px 18px; cursor: pointer; font-size: 1.1em; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; background: transparent; }
-                .鉴定_page .sort-tab-his.active { background: #7EB8DA; color: #fff; border-color: #7EB8DA; }
+                .鉴定_page .sort-tab-his.active { background: #FE8A95; color: #fff; border-color: #FE8A95; }
             </style>
 
             <main class="鉴定_page">
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap;">
-                    <button class="sort-tab active" data-sort="common_love">共同喜爱</button>
-                    <button class="sort-tab" data-sort="common_hate">共同厌恶</button>
-                    <button class="sort-tab" data-sort="united_front">一致对外</button>
-                    <button class="sort-tab" data-sort="niche">冷门共鸣</button>
-                    <button class="sort-tab" data-sort="diff_high">争议最大</button>
-                    <button class="sort-tab" data-sort="watching">共同在看</button>
-                    <span class="sort-count-label" style="color: #888; font-size: 0.9em;">共 ${result.common_love_list.length} 条</span>
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap;">
-                    <button class="sort-tab-his" data-sort="his_love">对方最爱</button>
-                    <button class="sort-tab-his" data-sort="his_hate">对方最厌恶</button>
-                    <button class="sort-tab-his" data-sort="his_public_diff">对方与大众差距</button>
-                    <button class="sort-tab-his" data-sort="his_niche">对方冷门高分</button>
-                    <label style="font-size: 0.9em; display: flex; align-items: center; gap: 6px;">
-                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                <div style="display: flex; align-items: flex-start; margin-bottom: 12px;">
+                    <div style="flex: 1;">
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
+                            <button class="sort-tab active" data-sort="common_love">共同喜爱</button>
+                            <button class="sort-tab" data-sort="common_hate">共同厌恶</button>
+                            <button class="sort-tab" data-sort="united_front">一致对外</button>
+                            <button class="sort-tab" data-sort="niche">冷门共鸣</button>
+                            <button class="sort-tab" data-sort="diff_high">争议最大</button>
+                            <button class="sort-tab" data-sort="watching">共同在看</button>
+                            <span class="sort-count-label" style="color: #888; font-size: 0.9em;">共 ${result.common_love_list.length} 条</span>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <button class="sort-tab-his" data-sort="his_love">对方最爱</button>
+                            <button class="sort-tab-his" data-sort="his_hate">对方最厌恶</button>
+                            <button class="sort-tab-his" data-sort="his_public_diff">对方与大众差距</button>
+                            <button class="sort-tab-his" data-sort="his_niche">对方冷门高分</button>
+                        </div>
+                    </div>
+                    <div style="width: 300px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-shrink: 0;">
+                        <button id="force-update-btn" style="padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
+                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.9em;">
                             <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
                             吐槽
                         </label>
@@ -677,7 +684,7 @@
                             <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>50</option>
                             <option value="9999" ${analyze_config.display_count >= 9999 ? 'selected' : ''}>全部</option>
                         </select>
-                    </label>
+                    </div>
                 </div>
                 <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;"></div>
                 <div id="sort-list-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 50px 10px;">
@@ -751,6 +758,18 @@
                 analyze_config.show_comments = e.target.checked
                 save_settings()
                 refreshList()
+            })
+
+            // 强制更新缓存
+            document.getElementById('force-update-btn').addEventListener('click', async () => {
+                const btn = document.getElementById('force-update-btn')
+                btn.textContent = '更新中...'
+                btn.disabled = true
+                try {
+                    await inject_analyze_page(true)
+                } catch (e) {
+                    alert(`更新失败: ${e.message}`)
+                }
             })
 
         } catch (e) {
