@@ -25,6 +25,7 @@
         display_count: 10,
         show_comments: false,
         current_sort: 'common_love',
+        filter_types: [1, 2, 3, 4, 5],
     }
 
     // ─── 本地设置缓存 ───
@@ -39,6 +40,7 @@
                 if (typeof saved.show_comments === 'boolean') analyze_config.show_comments = saved.show_comments
                 if (typeof saved.cur_subject_id === 'number') analyze_config.cur_subject_id = saved.cur_subject_id
                 if (typeof saved.current_sort === 'string') analyze_config.current_sort = saved.current_sort
+                if (Array.isArray(saved.filter_types)) analyze_config.filter_types = saved.filter_types
             }
         } catch (e) { /* ignore */ }
     }
@@ -49,6 +51,7 @@
             show_comments: analyze_config.show_comments,
             cur_subject_id: analyze_config.cur_subject_id,
             current_sort: analyze_config.current_sort,
+            filter_types: analyze_config.filter_types,
         }))
     }
 
@@ -443,6 +446,71 @@
 
         /**
          * 主分析函数
+         * 弱评分类计算（无视 filter_types，使用原始数据）
+         * @param {Collection[]} my_col
+         * @param {Collection[]} his_col
+         * @returns {Object}
+         */
+        function calc_weak_rating_lists(my_col, his_col) {
+            const watching_list = calc_watching_list(my_col, his_col)
+            const weak_intersections = calc_weak_intersections(my_col, his_col)
+
+            const common_new_list = [...weak_intersections].sort((a, b) => {
+                const dateA = a.subject.date || ''
+                const dateB = b.subject.date || ''
+                return dateB.localeCompare(dateA)
+            })
+
+            const common_old_list = [...weak_intersections].sort((a, b) => {
+                const dateA = a.subject.date || ''
+                const dateB = b.subject.date || ''
+                return dateA.localeCompare(dateB)
+            })
+
+            const his_col_map = new Map(his_col.map(c => [c.subject_id, c]))
+
+            // 想看推荐：我想看 + 对方(看过/想看/在看)，排除搁置/抛弃
+            const want_recommend_list = my_col
+                .filter(c => c.type === 1)
+                .map(c => {
+                    const his = his_col_map.get(c.subject_id)
+                    if (!his || his.type === 4 || his.type === 5) return null
+                    return {
+                        subject: c.subject,
+                        my_review: { rate: c.rate, comment: c.comment, date: new Date(c.updated_at), type: c.type },
+                        his_review: { rate: his.rate, comment: his.comment, date: new Date(his.updated_at), type: his.type },
+                    }
+                })
+                .filter(Boolean)
+                .sort((a, b) => (b.his_review.rate || 0) - (a.his_review.rate || 0))
+
+            // 想看避雷：我想看 + 对方非想看，按对方评分升序（0分放最后）
+            const want_avoid_list = my_col
+                .filter(c => c.type === 1)
+                .map(c => {
+                    const his = his_col_map.get(c.subject_id)
+                    if (!his || his.type === 1) return null
+                    return {
+                        subject: c.subject,
+                        my_review: { rate: c.rate, comment: c.comment, date: new Date(c.updated_at), type: c.type },
+                        his_review: { rate: his.rate, comment: his.comment, date: new Date(his.updated_at), type: his.type },
+                    }
+                })
+                .filter(Boolean)
+                .sort((a, b) => {
+                    const ar = a.his_review.rate || 0
+                    const br = b.his_review.rate || 0
+                    if (ar === 0 && br === 0) return 0
+                    if (ar === 0) return 1
+                    if (br === 0) return -1
+                    return ar - br
+                })
+
+            return { watching_list, common_new_list, common_old_list, want_recommend_list, want_avoid_list }
+        }
+
+        /**
+         * 主分析函数
          * @param {string} my_id
          * @param {string} his_id
          * @returns {Object}
@@ -453,9 +521,14 @@
                 load_manager_async.get_coll(his_id, force)
             ])
 
-            const my_rate_count_map = calc_rate_count_map(my_collections)
-            const his_rate_count_map = calc_rate_count_map(his_collections)
-            const intersections = calc_intersections(my_collections, his_collections)
+            // 按收藏类型过滤
+            const active_types = new Set(analyze_config.filter_types)
+            const my_filtered = my_collections.filter(c => active_types.has(c.type))
+            const his_filtered = his_collections.filter(c => active_types.has(c.type))
+
+            const my_rate_count_map = calc_rate_count_map(my_filtered)
+            const his_rate_count_map = calc_rate_count_map(his_filtered)
+            const intersections = calc_intersections(my_filtered, his_filtered)
 
             // 共同喜爱：双方分数都高为前提，再比较与大众评分的差异
             const common_love_list = [...intersections].sort((a, b) => {
@@ -495,12 +568,9 @@
             // 争议最大：二人差异度最大
             const diff_high_list = [...intersections].sort((a, b) => b.diff - a.diff)
 
-            // 共同在看：双方都是在看状态，含未评分
-            const watching_list = calc_watching_list(my_collections, his_collections)
-
             // ── 对方维度（对方全部收藏，不限于共同交集） ──
 
-            const his_all = his_collections.filter(c => c.rate > 0).map(c => ({
+            const his_all = his_filtered.filter(c => c.rate > 0).map(c => ({
                 subject: c.subject,
                 my_review: null,
                 his_review: {
@@ -568,39 +638,15 @@
                 return diffA - diffB
             })
 
-            // ── 弱评分类（含无评分收藏） ──
+            // ── 弱评分类（无视 filter_types，使用原始数据） ──
 
-            const weak_intersections = calc_weak_intersections(my_collections, his_collections)
-
-            // 共同追新：按作品日期从新到旧
-            const common_new_list = [...weak_intersections].sort((a, b) => {
-                const dateA = a.subject.date || ''
-                const dateB = b.subject.date || ''
-                return dateB.localeCompare(dateA)
-            })
-
-            // 共同回忆：按作品日期从旧到新
-            const common_old_list = [...weak_intersections].sort((a, b) => {
-                const dateA = a.subject.date || ''
-                const dateB = b.subject.date || ''
-                return dateA.localeCompare(dateB)
-            })
-
-            // 想看推荐：我想看 + 对方已看（非想看）
-            const his_col_map = new Map(his_collections.map(c => [c.subject_id, c]))
-            const want_recommend_list = my_collections
-                .filter(c => c.type === 1)
-                .map(c => {
-                    const his = his_col_map.get(c.subject_id)
-                    if (!his || his.type === 1) return null
-                    return {
-                        subject: c.subject,
-                        my_review: { rate: c.rate, comment: c.comment, date: new Date(c.updated_at), type: c.type },
-                        his_review: { rate: his.rate, comment: his.comment, date: new Date(his.updated_at), type: his.type },
-                    }
-                })
-                .filter(Boolean)
-                .sort((a, b) => (b.his_review.rate || 0) - (a.his_review.rate || 0))
+            const {
+                watching_list,
+                common_new_list,
+                common_old_list,
+                want_recommend_list,
+                want_avoid_list,
+            } = calc_weak_rating_lists(my_collections, his_collections)
 
             return {
                 diff_high_list,
@@ -621,6 +667,7 @@
                 common_new_list,
                 common_old_list,
                 want_recommend_list,
+                want_avoid_list,
                 my_rate_count_map,
                 his_rate_count_map,
             }
@@ -679,6 +726,7 @@
                 common_new: result.common_new_list,
                 common_old: result.common_old_list,
                 want_recommend: result.want_recommend_list,
+                want_avoid: result.want_avoid_list,
             }
 
             // ─── 构建 UI ───
@@ -876,7 +924,10 @@
                 }
                 .鉴定_page ._compact_card:hover ._compact_tip { display: block; }
                 .鉴定_page .sort-tab { padding: 8px 18px; cursor: pointer; font-size: 1.1em; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; background: transparent; }
-                .鉴定_page .sort-tab.active { background: #FE8A95; color: #fff; border-color: #FE8A95; }
+                .鉴定_page .sort-tab.active { background: #F09199; color: #fff; border-color: #F09199; }
+                #type-filter-menu { background: #fff; border: 1px solid #ccc; }
+                html[data-theme=dark] #type-filter-menu { background: #2c2c2c; border-color: #555; }
+                html[data-theme=dark] #type-filter-menu label:hover { background: #3a3a3a; }
             </style>
 
             <main class="鉴定_page">
@@ -908,10 +959,22 @@
                             <button class="sort-tab${analyze_config.current_sort === 'common_new' ? ' active' : ''}" data-sort="common_new">共同追新</button>
                             <button class="sort-tab${analyze_config.current_sort === 'common_old' ? ' active' : ''}" data-sort="common_old">共同回忆</button>
                             <button class="sort-tab${analyze_config.current_sort === 'want_recommend' ? ' active' : ''}" data-sort="want_recommend">想看推荐</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'want_avoid' ? ' active' : ''}" data-sort="want_avoid">想看避雷</button>
                         </div>
                     </div>
                     <div style="width: 300px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0;">
-                        <div style="display: flex; gap: 10px; align-items: center;">
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <div id="type-filter-dropdown" style="position: relative;">
+                                <button id="type-filter-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">收藏类型 ▾</button>
+                                <div id="type-filter-menu" style="display: none; position: absolute; top: 100%; left: 0; border-radius: 4px; padding: 6px 0; z-index: 10; min-width: 120px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                                    ${[1,2,3,4,5].map(t => `
+                                        <label style="display: flex; align-items: center; gap: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.9em;">
+                                            <input type="checkbox" class="type-filter-cb" data-type="${t}" ${analyze_config.filter_types.includes(t) ? 'checked' : ''} />
+                                            ${collTypeMap[String(t)]}
+                                        </label>
+                                    `).join('')}
+                                </div>
+                            </div>
                             <select id="subject-type-select" style="padding: 4px 8px; font-size: 1em;">
                                 <option value="2" ${analyze_config.cur_subject_id === 2 ? 'selected' : ''}>动画</option>
                                 <option value="1" ${analyze_config.cur_subject_id === 1 ? 'selected' : ''}>书籍</option>
@@ -966,7 +1029,8 @@
                 watching: '双方都在看的条目，包含未评分的。优先按最近更新时间排序，无评分时按冷门共鸣排序。',
                 common_new: '双方都收藏的条目中，按作品日期从新到旧。<br>公式：<code>作品日期</code> 降序',
                 common_old: '双方都收藏的条目中，按作品日期从旧到新。<br>公式：<code>作品日期</code> 升序',
-                want_recommend: '我想看但对方已看过的条目，按对方评分降序——TA 的高分作品值得优先看。',
+                want_recommend: '我想看但对方已看过的条目，按对方评分降序——TA 的高分作品值得优先看。<br>允许对方看过/想看/在看，排除搁置/抛弃。',
+                want_avoid: '我想看但对方评价较低的条目，按对方评分升序——TA 的低分作品需要避雷。<br>对方全部状态均参与排序。',
             }
             function updateDescription() {
                 document.getElementById('sort-description').innerHTML = sort_desc[analyze_config.current_sort]
@@ -1003,6 +1067,30 @@
                 analyze_config.display_count = parseInt(e.target.value)
                 save_settings()
                 refreshList()
+            })
+
+            // 收藏类型下拉菜单
+            const typeFilterBtn = document.getElementById('type-filter-btn')
+            const typeFilterMenu = document.getElementById('type-filter-menu')
+            typeFilterBtn.addEventListener('click', (e) => {
+                e.stopPropagation()
+                typeFilterMenu.style.display = typeFilterMenu.style.display === 'none' ? 'block' : 'none'
+            })
+            typeFilterMenu.addEventListener('click', (e) => {
+                e.stopPropagation()
+            })
+            document.addEventListener('click', () => {
+                if (typeFilterMenu.style.display === 'none') return
+                typeFilterMenu.style.display = 'none'
+                const checked = $page.querySelectorAll('.type-filter-cb:checked')
+                const new_types = Array.from(checked).map(c => parseInt(c.dataset.type))
+                const old_types = analyze_config.filter_types
+                const changed = new_types.length !== old_types.length || new_types.some(t => !old_types.includes(t))
+                if (changed) {
+                    analyze_config.filter_types = new_types
+                    save_settings()
+                    inject_analyze_page(false)
+                }
             })
 
             // Subject 类型下拉框
