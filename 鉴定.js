@@ -12,6 +12,7 @@
     const FEEDBACK_URL = 'https://bgm.tv/group/topic/462826'
 
     const subject_config = {
+        0: { name: "全部", id: 0 },
         1: { name: "书籍", id: 1 },
         2: { name: "动画", id: 2 },
         3: { name: "音乐", id: 3 },
@@ -22,7 +23,8 @@
     const analyze_config = {
         cur_subject_id: 2,
         display_count: 10,
-        show_comments: true,
+        show_comments: false,
+        current_sort: 'common_love',
     }
 
     // ─── 本地设置缓存 ───
@@ -35,6 +37,8 @@
             if (saved) {
                 if (typeof saved.display_count === 'number') analyze_config.display_count = saved.display_count
                 if (typeof saved.show_comments === 'boolean') analyze_config.show_comments = saved.show_comments
+                if (typeof saved.cur_subject_id === 'number') analyze_config.cur_subject_id = saved.cur_subject_id
+                if (typeof saved.current_sort === 'string') analyze_config.current_sort = saved.current_sort
             }
         } catch (e) { /* ignore */ }
     }
@@ -43,6 +47,8 @@
         localStorage.setItem(SETTINGS_KEY, JSON.stringify({
             display_count: analyze_config.display_count,
             show_comments: analyze_config.show_comments,
+            cur_subject_id: analyze_config.cur_subject_id,
+            current_sort: analyze_config.current_sort,
         }))
     }
 
@@ -157,7 +163,9 @@
             }
 
             function transCollKey(user_id, subject_type) {
-                return `https://api.bgm.tv/v0/users/${user_id}/collections?subject_type=${subject_type}`
+                return subject_type > 0
+                    ? `https://api.bgm.tv/v0/users/${user_id}/collections?subject_type=${subject_type}`
+                    : `https://api.bgm.tv/v0/users/${user_id}/collections`
             }
 
             function transUserKey(username) {
@@ -175,7 +183,8 @@
     const load_manager_async = (() => {
         async function fetch_all_collections(username, subject_id) {
             const limit = 100
-            const api = `https://api.bgm.tv/v0/users/${username}/collections?subject_type=${subject_id}&limit=${limit}&offset=`
+            const typeParam = subject_id > 0 ? `subject_type=${subject_id}&` : ''
+            const api = `https://api.bgm.tv/v0/users/${username}/collections?${typeParam}limit=${limit}&offset=`
 
             const res = await fetch(api + 0)
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -199,18 +208,45 @@
         }
 
         async function get_coll(username, force = false) {
-            const cache_key = api_cache.transCollKey(username, analyze_config.cur_subject_id)
-            let collections = force ? null : await api_cache.get(cache_key)
+            const subject_id = analyze_config.cur_subject_id
 
-            if (!collections) {
-                try {
-                    collections = await fetch_all_collections(username, analyze_config.cur_subject_id)
-                    await api_cache.set(cache_key, collections)
-                } catch (e) {
-                    throw `自动获取${username}的${subject_config[analyze_config.cur_subject_id].name}缓存失败: ${e.message}`
+            // 具体 subject：直接读/写该 subject 的缓存
+            if (subject_id > 0) {
+                const cache_key = api_cache.transCollKey(username, subject_id)
+                let collections = force ? null : await api_cache.get(cache_key)
+                if (!collections) {
+                    try {
+                        collections = await fetch_all_collections(username, subject_id)
+                        await api_cache.set(cache_key, collections)
+                    } catch (e) {
+                        throw `自动获取${username}的${subject_config[subject_id].name}缓存失败: ${e.message}`
+                    }
                 }
+                return collections
             }
-            return collections
+
+            // 全部：尝试聚合 5 个 subject 缓存
+            const subject_ids = [1, 2, 3, 4, 6]
+            const cached = await Promise.all(
+                subject_ids.map(id => api_cache.get(api_cache.transCollKey(username, id)))
+            )
+
+            // 全部命中 → 聚合
+            if (cached.every(c => c) && !force) {
+                return cached.flat()
+            }
+
+            // 有缺失 → 一次性拉取所有，同时填充各 subject 缓存
+            try {
+                const all = await fetch_all_collections(username, 0)
+                for (const id of subject_ids) {
+                    const filtered = all.filter(c => c.subject_type === id)
+                    await api_cache.set(api_cache.transCollKey(username, id), filtered)
+                }
+                return all
+            } catch (e) {
+                throw `自动获取${username}的全部收藏缓存失败: ${e.message}`
+            }
         }
 
         async function fetch_user(username) {
@@ -624,6 +660,27 @@
 
             const result = await analyze.run(my_id, his_id, force)
 
+            const sort_map = {
+                common_love: result.common_love_list,
+                common_hate: result.common_hate_list,
+                united_front: result.united_front_list,
+                niche: result.niche_list,
+                diff_high: result.diff_high_list,
+                i_high_he_low: result.i_high_he_low_list,
+                i_low_he_high: result.i_low_he_high_list,
+                hot_diverge: result.hot_diverge_list,
+                diverge_reverse: result.diverge_reverse_list,
+                his_love: result.his_love_list,
+                his_hate: result.his_hate_list,
+                his_public_diff: result.his_public_diff_list,
+                his_niche: result.his_niche_list,
+                his_close_public: result.his_close_public_list,
+                watching: result.watching_list,
+                common_new: result.common_new_list,
+                common_old: result.common_old_list,
+                want_recommend: result.want_recommend_list,
+            }
+
             // ─── 构建 UI ───
 
             // 分布图工厂
@@ -826,52 +883,64 @@
                 <div style="display: flex; align-items: flex-start; margin-bottom: 12px;">
                     <div style="flex: 1;">
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
-                            <button class="sort-tab active" data-sort="common_love">共同喜爱</button>
-                            <button class="sort-tab" data-sort="common_hate">共同厌恶</button>
-                            <button class="sort-tab" data-sort="united_front">一致对外</button>
-                            <button class="sort-tab" data-sort="niche">冷门共鸣</button>
-                            <span class="sort-count-label" style="color: #888; font-size: 0.9em;">共 ${result.common_love_list.length} 条</span>
+                            <button class="sort-tab${analyze_config.current_sort === 'common_love' ? ' active' : ''}" data-sort="common_love">共同喜爱</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'common_hate' ? ' active' : ''}" data-sort="common_hate">共同厌恶</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'united_front' ? ' active' : ''}" data-sort="united_front">一致对外</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'niche' ? ' active' : ''}" data-sort="niche">冷门共鸣</button>
+                            <span class="sort-count-label" style="color: #888; font-size: 0.9em;">共 ${sort_map[analyze_config.current_sort].length} 条</span>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
-                        <button class="sort-tab" data-sort="i_high_he_low">我高他低</button>
-                        <button class="sort-tab" data-sort="i_low_he_high">我低他高</button>
-                        <button class="sort-tab" data-sort="diff_high">争议最大</button>
-                        <button class="sort-tab" data-sort="diverge_reverse">大众反转</button>
-                            <button class="sort-tab" data-sort="hot_diverge">热门分歧</button>
+                        <button class="sort-tab${analyze_config.current_sort === 'i_high_he_low' ? ' active' : ''}" data-sort="i_high_he_low">我高他低</button>
+                        <button class="sort-tab${analyze_config.current_sort === 'i_low_he_high' ? ' active' : ''}" data-sort="i_low_he_high">我低他高</button>
+                        <button class="sort-tab${analyze_config.current_sort === 'diff_high' ? ' active' : ''}" data-sort="diff_high">争议最大</button>
+                        <button class="sort-tab${analyze_config.current_sort === 'diverge_reverse' ? ' active' : ''}" data-sort="diverge_reverse">大众反转</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'hot_diverge' ? ' active' : ''}" data-sort="hot_diverge">热门分歧</button>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
-                            <button class="sort-tab" data-sort="his_love">对方高分</button>
-                            <button class="sort-tab" data-sort="his_hate">对方低分</button>
-                            <button class="sort-tab" data-sort="his_public_diff">对方独特</button>
-                            <button class="sort-tab" data-sort="his_niche">对方冷门</button>
-                            <button class="sort-tab" data-sort="his_close_public">接近大众</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'his_love' ? ' active' : ''}" data-sort="his_love">对方高分</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'his_hate' ? ' active' : ''}" data-sort="his_hate">对方低分</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'his_public_diff' ? ' active' : ''}" data-sort="his_public_diff">对方独特</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'his_niche' ? ' active' : ''}" data-sort="his_niche">对方冷门</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'his_close_public' ? ' active' : ''}" data-sort="his_close_public">接近大众</button>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                            <button class="sort-tab" data-sort="watching">共同在看</button>
-                            <button class="sort-tab" data-sort="common_new">共同追新</button>
-                            <button class="sort-tab" data-sort="common_old">共同回忆</button>
-                            <button class="sort-tab" data-sort="want_recommend">想看推荐</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'watching' ? ' active' : ''}" data-sort="watching">共同在看</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'common_new' ? ' active' : ''}" data-sort="common_new">共同追新</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'common_old' ? ' active' : ''}" data-sort="common_old">共同回忆</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'want_recommend' ? ' active' : ''}" data-sort="want_recommend">想看推荐</button>
                         </div>
                     </div>
-                    <div style="width: 300px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-shrink: 0;">
-                        <button id="force-update-btn" style="padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
-                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.9em;">
-                            <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
-                            详细
-                        </label>
-                        <select id="display-count-select" style="padding: 4px 8px; font-size: 1em;">
-                            <option value="5" ${analyze_config.display_count === 5 ? 'selected' : ''}>5</option>
-                            <option value="10" ${analyze_config.display_count === 10 ? 'selected' : ''}>10</option>
-                            <option value="20" ${analyze_config.display_count === 20 ? 'selected' : ''}>20</option>
-                            <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>50</option>
-                            <option value="9999" ${analyze_config.display_count >= 9999 ? 'selected' : ''}>全部</option>
-                        </select>
-                        <a href="${FEEDBACK_URL}" id="feedback-link" style="font-size: 0.9em; color: #888; cursor: pointer;">点我反馈</a>
+                    <div style="width: 300px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0;">
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <select id="subject-type-select" style="padding: 4px 8px; font-size: 1em;">
+                                <option value="2" ${analyze_config.cur_subject_id === 2 ? 'selected' : ''}>动画</option>
+                                <option value="1" ${analyze_config.cur_subject_id === 1 ? 'selected' : ''}>书籍</option>
+                                <option value="3" ${analyze_config.cur_subject_id === 3 ? 'selected' : ''}>音乐</option>
+                                <option value="4" ${analyze_config.cur_subject_id === 4 ? 'selected' : ''}>游戏</option>
+                                <option value="6" ${analyze_config.cur_subject_id === 6 ? 'selected' : ''}>三次元</option>
+                                <option value="0" ${analyze_config.cur_subject_id === 0 ? 'selected' : ''}>全部</option>
+                            </select>
+                            <select id="display-count-select" style="padding: 4px 8px; font-size: 1em;">
+                                <option value="5" ${analyze_config.display_count === 5 ? 'selected' : ''}>5</option>
+                                <option value="10" ${analyze_config.display_count === 10 ? 'selected' : ''}>10</option>
+                                <option value="20" ${analyze_config.display_count === 20 ? 'selected' : ''}>20</option>
+                                <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>50</option>
+                                <option value="9999" ${analyze_config.display_count >= 9999 ? 'selected' : ''}>全部</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button id="force-update-btn" style="padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
+                            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.9em;">
+                                <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
+                                详细
+                            </label>
+                            <a href="${FEEDBACK_URL}" id="feedback-link" style="font-size: 0.9em; color: #888; cursor: pointer;">点我反馈</a>
+                        </div>
                     </div>
                 </div>
                 <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;"></div>
                 <div id="sort-list-container" style="display: grid; grid-template-columns: ${analyze_config.show_comments ? 'repeat(auto-fill, minmax(450px, 1fr))' : 'repeat(auto-fill, 120px)'}; gap: ${analyze_config.show_comments ? '50px 10px' : '10px 10px'};">
-                    ${render_list(result.common_love_list, analyze_config.display_count)}
+                    ${render_list(sort_map[analyze_config.current_sort], analyze_config.display_count)}
                 </div>
             </main>`
 
@@ -879,26 +948,6 @@
 
             // ─── 事件绑定 ───
 
-            const sort_map = {
-                common_love: result.common_love_list,
-                common_hate: result.common_hate_list,
-                united_front: result.united_front_list,
-                niche: result.niche_list,
-                diff_high: result.diff_high_list,
-                i_high_he_low: result.i_high_he_low_list,
-                i_low_he_high: result.i_low_he_high_list,
-                hot_diverge: result.hot_diverge_list,
-                diverge_reverse: result.diverge_reverse_list,
-                his_love: result.his_love_list,
-                his_hate: result.his_hate_list,
-                his_public_diff: result.his_public_diff_list,
-                his_niche: result.his_niche_list,
-                his_close_public: result.his_close_public_list,
-                watching: result.watching_list,
-                common_new: result.common_new_list,
-                common_old: result.common_old_list,
-                want_recommend: result.want_recommend_list,
-            }
             const sort_desc = {
                 common_love: '双方都给了高分的条目。优先按双方评分之和降序，同分时按与大众均分的差异降序。<br>公式：<code>(我 + 对方)</code> 高优先 → <code>(|我 − 大众| + |对方 − 大众|) / 2</code> 大优先',
                 common_hate: '双方都给了低分的条目。优先按两人中较高分升序（确保双方都低），再按评分之和升序，最后按与大众均分的差异降序。<br>公式：<code>max(我, 对方)</code> 低优先 → <code>(我 + 对方)</code> 低优先 → <code>(|我 − 大众| + |对方 − 大众|) / 2</code> 大优先',
@@ -919,15 +968,13 @@
                 common_old: '双方都收藏的条目中，按作品日期从旧到新。<br>公式：<code>作品日期</code> 升序',
                 want_recommend: '我想看但对方已看过的条目，按对方评分降序——TA 的高分作品值得优先看。',
             }
-            let currentSort = 'common_love'
-
             function updateDescription() {
-                document.getElementById('sort-description').innerHTML = sort_desc[currentSort]
+                document.getElementById('sort-description').innerHTML = sort_desc[analyze_config.current_sort]
             }
 
             function refreshList() {
                 const count = parseInt(document.getElementById('display-count-select').value)
-                const list = sort_map[currentSort]
+                const list = sort_map[analyze_config.current_sort]
                 const container = document.getElementById('sort-list-container')
                 container.innerHTML = render_list(list, count)
                 container.style.gridTemplateColumns = analyze_config.show_comments
@@ -945,7 +992,8 @@
                 tab.addEventListener('click', () => {
                     $page.querySelectorAll('.sort-tab').forEach(t => t.classList.remove('active'))
                     tab.classList.add('active')
-                    currentSort = tab.dataset.sort
+                    analyze_config.current_sort = tab.dataset.sort
+                    save_settings()
                     refreshList()
                 })
             })
@@ -955,6 +1003,13 @@
                 analyze_config.display_count = parseInt(e.target.value)
                 save_settings()
                 refreshList()
+            })
+
+            // Subject 类型下拉框
+            document.getElementById('subject-type-select').addEventListener('change', async (e) => {
+                analyze_config.cur_subject_id = parseInt(e.target.value)
+                save_settings()
+                await inject_analyze_page(false)
             })
 
             // 吐槽开关
