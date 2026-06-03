@@ -8,7 +8,8 @@
 // ==/UserScript==
 (function () {
 
-    const TITLE = false ? '影之智慧' : '影实'
+    const TITLE = false ? '影之智慧' : '影实测试'
+    const FEEDBACK_URL = 'https://bgm.tv/group/topic/462826'
 
     const subject_config = {
         1: { name: "书籍", id: 1 },
@@ -699,10 +700,12 @@
                 const pub_score = review.subject.score
                 const his_comment = review.his_review?.comment ? escapeHtml(review.his_review.comment) : '无'
                 const my_comment = review.my_review?.comment ? escapeHtml(review.my_review.comment) : '无'
+                const name = escapeHtml(getSubjectDisplayName(review.subject))
                 return `
                 <a href="/subject/${review.subject.id}" target="_blank" class="_compact_card">
                     <img src="${review.subject.images?.grid || ''}" loading="lazy"/>
                     <div class="_compact_tip">
+                        ${name}<br>
                         我:${my_rate} 对方:${his_rate} 大众:${pub_score}<br>
                         对方: ${his_comment}<br>
                         我: ${my_comment}
@@ -802,7 +805,7 @@
                     top: 100%;
                     left: 50%;
                     transform: translateX(-50%);
-                    background: rgba(0,0,0,0.7);
+                    background: rgba(0,0,0,0.85);
                     color: #fff;
                     font-size: 14px;
                     padding: 4px 8px;
@@ -830,11 +833,11 @@
                             <span class="sort-count-label" style="color: #888; font-size: 0.9em;">共 ${result.common_love_list.length} 条</span>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
-                            <button class="sort-tab" data-sort="diff_high">争议最大</button>
-                            <button class="sort-tab" data-sort="i_high_he_low">我高他低</button>
-                            <button class="sort-tab" data-sort="i_low_he_high">我低他高</button>
+                        <button class="sort-tab" data-sort="i_high_he_low">我高他低</button>
+                        <button class="sort-tab" data-sort="i_low_he_high">我低他高</button>
+                        <button class="sort-tab" data-sort="diff_high">争议最大</button>
+                        <button class="sort-tab" data-sort="diverge_reverse">大众反转</button>
                             <button class="sort-tab" data-sort="hot_diverge">热门分歧</button>
-                            <button class="sort-tab" data-sort="diverge_reverse">分歧反转</button>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
                             <button class="sort-tab" data-sort="his_love">对方高分</button>
@@ -863,6 +866,7 @@
                             <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>50</option>
                             <option value="9999" ${analyze_config.display_count >= 9999 ? 'selected' : ''}>全部</option>
                         </select>
+                        <a href="${FEEDBACK_URL}" id="feedback-link" style="font-size: 0.9em; color: #888; cursor: pointer;">点我反馈</a>
                     </div>
                 </div>
                 <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;"></div>
@@ -958,6 +962,13 @@
                 analyze_config.show_comments = e.target.checked
                 save_settings()
                 refreshList()
+            })
+
+            // 反馈链接
+            document.getElementById('feedback-link').addEventListener('click', (e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                window.open(FEEDBACK_URL, '_blank')
             })
 
             // 强制更新缓存
