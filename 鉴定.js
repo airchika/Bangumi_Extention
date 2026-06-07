@@ -547,15 +547,18 @@
             const his_rate_count_map = calc_rate_count_map(his_filtered)
             const intersections = calc_intersections(my_filtered, his_filtered)
 
-            // 共同喜爱：双方分数都高为前提，再比较与大众评分的差异
+            // 共同喜爱：全量排序，渲染时按阈值过滤
             const common_love_list = [...intersections].sort((a, b) => {
+                const minA = Math.min(a.my_review.rate, a.his_review.rate)
+                const minB = Math.min(b.my_review.rate, b.his_review.rate)
+                if (minA !== minB) return minB - minA
                 const sumA = a.my_review.rate + a.his_review.rate
                 const sumB = b.my_review.rate + b.his_review.rate
                 if (sumA !== sumB) return sumB - sumA
                 return b.public_diff - a.public_diff
             })
 
-            // 共同厌恶：双方分数都低为前提，再比较与大众评分的差异
+            // 共同低分：全量排序，渲染时按阈值过滤
             const common_hate_list = [...intersections].sort((a, b) => {
                 const maxA = Math.max(a.my_review.rate, a.his_review.rate)
                 const maxB = Math.max(b.my_review.rate, b.his_review.rate)
@@ -580,8 +583,10 @@
                 return scoreB - scoreA
             })
 
-            // 冷门共鸣：双方都给高分但收藏人数少
-            const niche_list = [...intersections].sort((a, b) => {
+            // 冷门共鸣：评分人数 <= 5000，按共鸣分排序
+            const niche_list = [...intersections]
+                .filter(a => (a.subject.collection_total || 0) <= 10000)
+                .sort((a, b) => {
                 const totalA = a.subject.collection_total || 1
                 const totalB = b.subject.collection_total || 1
                 const nicheA = (a.my_review.rate + a.his_review.rate) / Math.log2(totalA + 1)
@@ -589,8 +594,10 @@
                 return nicheB - nicheA
             })
 
-            // 热门共鸣：双方都给高分且收藏人数多
-            const hot_consensus_list = [...intersections].sort((a, b) => {
+            // 热门共鸣：评分人数 >= 5001，按共鸣分排序
+            const hot_consensus_list = [...intersections]
+                .filter(a => (a.subject.collection_total || 0) >= 10001)
+                .sort((a, b) => {
                 const totalA = a.subject.collection_total || 1
                 const totalB = b.subject.collection_total || 1
                 const scoreA = (a.my_review.rate + a.his_review.rate) * Math.log2(totalA + 1)
@@ -627,15 +634,19 @@
                 return diffB - diffA
             })
 
-            // 对方最冷门高分：对方高分 + 收藏少
-            const his_niche_list = [...his_all].sort((a, b) => {
+            // 对方冷门高分：评分人数 <= 5000
+            const his_niche_list = [...his_all]
+                .filter(a => (a.subject.collection_total || 0) <= 10000)
+                .sort((a, b) => {
                 const nicheA = a.his_review.rate / Math.log2((a.subject.collection_total || 1) + 1)
                 const nicheB = b.his_review.rate / Math.log2((b.subject.collection_total || 1) + 1)
                 return nicheB - nicheA
             })
 
-            // 对方最热门高分：对方高分 + 收藏多
-            const his_hot_list = [...his_all].sort((a, b) => {
+            // 对方热门高分：评分人数 >= 5001
+            const his_hot_list = [...his_all]
+                .filter(a => (a.subject.collection_total || 0) >= 10001)
+                .sort((a, b) => {
                 const scoreA = a.his_review.rate * Math.log2((a.subject.collection_total || 1) + 1)
                 const scoreB = b.his_review.rate * Math.log2((b.subject.collection_total || 1) + 1)
                 return scoreB - scoreA
@@ -654,8 +665,10 @@
                     return scoreA - scoreB
                 })
 
-            // 热门分歧：高分歧 + 高人气
-            const hot_diverge_list = [...intersections].sort((a, b) => {
+            // 热门分歧：评分人数 >= 5001
+            const hot_diverge_list = [...intersections]
+                .filter(a => (a.subject.collection_total || 0) >= 10001)
+                .sort((a, b) => {
                 const totalA = a.subject.collection_total || 1
                 const totalB = b.subject.collection_total || 1
                 const scoreA = a.diff * Math.log2(totalA + 1)
@@ -663,8 +676,10 @@
                 return scoreB - scoreA
             })
 
-            // 冷门分歧：高分歧 + 低人气
-            const cold_diverge_list = [...intersections].sort((a, b) => {
+            // 冷门分歧：评分人数 <= 5000
+            const cold_diverge_list = [...intersections]
+                .filter(a => (a.subject.collection_total || 0) <= 10000)
+                .sort((a, b) => {
                 const totalA = a.subject.collection_total || 1
                 const totalB = b.subject.collection_total || 1
                 const scoreA = a.diff / Math.log2(totalA + 1)
@@ -795,6 +810,23 @@
                 want_recommend: result.want_recommend_list,
                 want_avoid: result.want_avoid_list,
                 his_watching: result.his_watching_list,
+            }
+
+            function getFilteredList(sortKey) {
+                const list = sort_map[sortKey]
+                if (sortKey === 'common_love') {
+                    return list.filter(a => a.my_review.rate > analyze_config.my_threshold_low && a.his_review.rate > analyze_config.his_threshold_low)
+                }
+                if (sortKey === 'common_hate') {
+                    return list.filter(a => a.my_review.rate <= analyze_config.my_threshold_low && a.his_review.rate <= analyze_config.his_threshold_low)
+                }
+                if (sortKey === 'want_recommend') {
+                    return list.filter(a => a.his_review.rate === 0 || a.his_review.rate > analyze_config.his_threshold_low)
+                }
+                if (sortKey === 'want_avoid') {
+                    return list.filter(a => a.his_review.rate > 0 && a.his_review.rate <= analyze_config.his_threshold_low)
+                }
+                return list
             }
 
             // ─── 构建 UI ───
@@ -1041,7 +1073,6 @@
                             <button class="sort-tab${analyze_config.current_sort === 'united_front' ? ' active' : ''}" data-sort="united_front">一致对外</button>
                             <button class="sort-tab${analyze_config.current_sort === 'hot_consensus' ? ' active' : ''}" data-sort="hot_consensus">热门共鸣</button>
                             <button class="sort-tab${analyze_config.current_sort === 'niche' ? ' active' : ''}" data-sort="niche">冷门共鸣</button>
-                            <span class="sort-count-label" style="color: #888; font-size: 0.9em;">共 ${sort_map[analyze_config.current_sort].length} 条</span>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
                             <span style="color: #888; font-size: 0.9em; margin-right: 2px;">双方差异</span>
@@ -1071,7 +1102,7 @@
                             <button class="sort-tab${analyze_config.current_sort === 'want_avoid' ? ' active' : ''}" data-sort="want_avoid">想看避雷</button>
                         </div>
                     </div>
-                    <div id="panel" style="width: 300px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0;">
+                    <div id="panel" style="width: 400px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0;">
                         <div id="panel-filter" style="display: flex; gap: 6px; align-items: center;">
                             <div id="type-filter-dropdown" style="position: relative;">
                                 <button id="type-filter-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">收藏类型 ▾</button>
@@ -1118,7 +1149,7 @@
                                 const stats = `看过${collCount} 吐槽${commentChars}字`
                                 return `
                                 <div class="threshold-slider-row" style="display: flex; gap: 8px; align-items: flex-start;">
-                                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-top: 2px;">
+                                    <div style="width: 170px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-top: 2px;">
                                         <span class="threshold-label" data-user="${user}" style="font-size: 0.85em; white-space: nowrap;"></span>
                                         <span style="font-size: 0.75em; color: #888;">${label} ${stats}</span>
                                     </div>
@@ -1135,9 +1166,9 @@
                         </div>
                     </div>
                 </div>
-                <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;"></div>
+                <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;">共 ${getFilteredList(analyze_config.current_sort).length} 条</div>
                 <div id="sort-list-container" style="display: grid; grid-template-columns: ${analyze_config.show_comments ? 'repeat(auto-fill, minmax(450px, 1fr))' : 'repeat(auto-fill, 120px)'}; gap: ${analyze_config.show_comments ? '50px 10px' : '10px 10px'};">
-                    ${render_list(sort_map[analyze_config.current_sort], analyze_config.display_count)}
+                    ${render_list(getFilteredList(analyze_config.current_sort), analyze_config.display_count)}
                 </div>
             </main>`
 
@@ -1146,44 +1177,45 @@
             // ─── 事件绑定 ───
 
             const sort_desc = {
-                common_love: '双方都给了高分的条目。优先按双方评分之和降序，同分时按与大众均分的差异降序。<br>公式：<code>(我 + 对方)</code> 高优先 → <code>(|我 − 大众| + |对方 − 大众|) / 2</code> 大优先',
-                common_hate: '双方都给了低分的条目。优先按两人中较高分升序（确保双方都低），再按评分之和升序，最后按与大众均分的差异降序。<br>公式：<code>max(我, 对方)</code> 低优先 → <code>(我 + 对方)</code> 低优先 → <code>(|我 − 大众| + |对方 − 大众|) / 2</code> 大优先',
+                common_love: '双方评价均为好/中的条目。优先按 min(双方分数) 降序，再按总分降序，最后按与大众均分的差异降序。<br>公式：<code>min(我, 对方)</code> 高优先 → <code>(我 + 对方)</code> 高优先 → <code>(|我 − 大众| + |对方 − 大众|) / 2</code> 大优先',
+                common_hate: '双方评价均为差的条目。优先按两人中较高分升序（确保双方都低），再按评分之和升序，最后按与大众均分的差异降序。<br>公式：<code>max(我, 对方)</code> 低优先 → <code>(我 + 对方)</code> 低优先 → <code>(|我 − 大众| + |对方 − 大众|) / 2</code> 大优先',
                 follow_crowd: '两人评分接近，且与大众均分也接近——你俩一致，和大家也一致。<br>公式：<code>1 / ((|我 − 大众| + |对方 − 大众|) / 2 + 0.5) / (|我 − 对方| + 0.5)</code> 大优先',
                 united_front: '两人评分接近，但与大众均分差异大——你俩一致，和外面的人不一样。<br>公式：<code>(|我 − 大众| + |对方 − 大众|) / 2 / (|我 − 对方| + 0.01)</code> 大优先',
-                niche: '双方都给了高分，但收藏人数很少——冷门中的共同宝藏。<br>公式：<code>(我 + 对方) / log₂(收藏数 + 1)</code> 大优先',
-                hot_consensus: '双方都给了高分，且收藏人数很多——热门中的共同认可。<br>公式：<code>(我 + 对方) × log₂(收藏数 + 1)</code> 大优先',
+                niche: '收藏数 ≤ 10000 的条目中，双方共鸣分最高——冷门中的共同宝藏。<br>公式：<code>(我 + 对方) / log₂(收藏数 + 1)</code> 大优先',
+                hot_consensus: '收藏数 ≥ 10001 的条目中，双方共鸣分最高——热门中的共同认可。<br>公式：<code>(我 + 对方) × log₂(收藏数 + 1)</code> 大优先',
                 diff_high: '两人评分差距最大的条目。<br>公式：<code>|我 − 对方|</code> 大优先',
                 i_high_he_low: '我比对方高分最多的作品——"我觉得好但 TA 不太认同"。<br>公式：<code>我 − 对方</code> 大优先（仅取正值）',
                 i_low_he_high: '对方比我高分最多的作品——"TA 觉得好但我不太认同"。<br>公式：<code>对方 − 我</code> 大优先（仅取正值）',
-                hot_diverge: '两人评分差距大且收藏人数多的条目——大热门中的分歧。<br>公式：<code>|我 − 对方| × log₂(收藏数 + 1)</code> 大优先',
-                cold_diverge: '两人评分差距大且收藏人数少的条目——冷门中的分歧。<br>公式：<code>|我 − 对方| / log₂(收藏数 + 1)</code> 大优先',
+                hot_diverge: '收藏数 ≥ 10001 的条目中，两人评分差距最大——大热门中的分歧。<br>公式：<code>|我 − 对方| × log₂(收藏数 + 1)</code> 大优先',
+                cold_diverge: '收藏数 ≤ 10000 的条目中，两人评分差距最大——冷门中的分歧。<br>公式：<code>|我 − 对方| / log₂(收藏数 + 1)</code> 大优先',
                 diverge_reverse: '一人高于大众、一人低于大众，方向完全相反。<br>公式：<code>(我 − 大众) × (对方 − 大众)</code> 越负越优先（需差值 ≥ 3）',
                 his_love: '对方全部收藏中评分最高的条目。<br>公式：<code>对方评分</code> 高优先',
                 his_hate: '对方全部收藏中评分最低的条目。<br>公式：<code>对方评分</code> 低优先',
                 his_public_diff: '对方全部收藏中与大众均分差距最大的条目——TA 的独特品味。<br>公式：<code>|对方评分 − 大众均分|</code> 大优先',
-                his_niche: '对方全部收藏中高分但收藏人数少的条目——TA 的冷门宝藏。<br>公式：<code>对方评分 / log₂(收藏数 + 1)</code> 大优先',
-                his_hot: '对方全部收藏中高分且收藏人数多的条目——TA 的热门最爱。<br>公式：<code>对方评分 × log₂(收藏数 + 1)</code> 大优先',
+                his_niche: '收藏数 ≤ 10000 的条目中，对方高分作品——TA 的冷门宝藏。<br>公式：<code>对方评分 / log₂(收藏数 + 1)</code> 大优先',
+                his_hot: '收藏数 ≥ 10001 的条目中，对方高分作品——TA 的热门最爱。<br>公式：<code>对方评分 × log₂(收藏数 + 1)</code> 大优先',
                 his_close_public: '对方全部收藏中评分最贴近大众共识的条目——TA 的主流品味。<br>公式：<code>|对方评分 − 大众均分|</code> 小优先',
+                his_watching: '对方正在看的条目，按最近更新排序。不论我方是否看过。',
                 watching: '双方都在看的条目，包含未评分的。优先按最近更新时间排序，无评分时按冷门共鸣排序。',
                 common_new: '双方都收藏的条目中，按作品日期从新到旧。<br>公式：<code>作品日期</code> 降序',
                 common_old: '双方都收藏的条目中，按作品日期从旧到新。<br>公式：<code>作品日期</code> 升序',
-                want_recommend: '我想看但对方已看过的条目，按对方评分降序——TA 的高分作品值得优先看。<br>允许对方看过/想看/在看，排除搁置/抛弃。',
-                want_avoid: '我想看但对方评价较低的条目，按对方评分升序——TA 的低分作品需要避雷。<br>对方全部状态均参与排序。',
+                want_recommend: '我想看且对方好/中/0分的条目，按对方评分降序——TA 的高分作品值得优先看。<br>仅限对方好评/中评/未评分，排除差评。',
+                want_avoid: '我想看且对方差分的条目，按对方评分升序——TA 的低分作品需要避雷。<br>仅限对方差评。',
             }
             function updateDescription() {
-                document.getElementById('sort-description').innerHTML = sort_desc[analyze_config.current_sort]
+                const list = getFilteredList(analyze_config.current_sort)
+                document.getElementById('sort-description').innerHTML = `共 ${list.length} 条 · ` + sort_desc[analyze_config.current_sort]
             }
 
             function refreshList() {
                 const count = parseInt(document.getElementById('display-count-select').value)
-                const list = sort_map[analyze_config.current_sort]
+                const list = getFilteredList(analyze_config.current_sort)
                 const container = document.getElementById('sort-list-container')
                 container.innerHTML = render_list(list, count)
                 container.style.gridTemplateColumns = analyze_config.show_comments
                     ? 'repeat(auto-fill, minmax(450px, 1fr))'
                     : 'repeat(auto-fill, 120px)'
                 container.style.gap = analyze_config.show_comments ? '50px 10px' : '10px 10px'
-                $page.querySelector('.sort-count-label').textContent = `共 ${list.length} 条`
                 updateDescription()
             }
 
@@ -1299,6 +1331,7 @@
             })
             updatePercentBar('my')
             updatePercentBar('his')
+            refreshList()
 
             // 滑块事件
             document.querySelectorAll('.range-handle').forEach(input => {
@@ -1318,6 +1351,7 @@
                     const label = container.closest('.threshold-slider-row').querySelector('.threshold-label')
                     updateThresholdLabel(label, lowVal, highVal)
                     updatePercentBar(user)
+                    refreshList()
                 })
             })
 
