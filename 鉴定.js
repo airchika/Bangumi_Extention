@@ -329,6 +329,53 @@
         return map
     }
 
+    // ─── 表情等级系统 ───
+
+    const emoMap = {
+        freeze:     { lv: 0,  descript: '霜之哀伤',         html: `<img src="/img/smiles/tv_500/bgm_518.gif" class="smile" smileid="518" alt="(bgm518)">` },
+        killed:     { lv: 1,  descript: '幻想杀手',         html: `<img src="/img/smiles/tv/89.gif" smileid="128" class="smile" alt="(bgm112)">` },
+        ques:       { lv: 2,  descript: '',               html: `<img src="/img/smiles/tv_500/bgm_502.png" class="smile" smileid="502" alt="(bgm502)">` },
+        silence:    { lv: 3,  descript: '一方通行',         html: `<img src="/img/smiles/tv_500/bgm_524.png" class="smile" smileid="524" alt="(bgm524)">` },
+        nosense:    { lv: 4,  descript: 'A.T.Field 100%',   html: `<img src="/img/smiles/tv/60.gif" smileid="99" class="smile" alt="(bgm83)">` },
+        mildnosense:{ lv: 5,  descript: '= =',            html: `<img src="/img/smiles/tv/49.gif" smileid="88" class="smile" alt="(bgm72)">` },
+        mildgood:   { lv: 6,  descript: '无口',           html: `<img src="/img/smiles/tv/44.gif" smileid="83" class="smile" alt="(bgm67)">` },
+        mildnice:   { lv: 7,  descript: '玩乐关系',         code: '(bmoCAIASgCWAiwE)' },
+        good:       { lv: 8,  descript: '愉悦',           html: `<img src="/img/smiles/tv/83.gif" smileid="122" class="smile" alt="(bgm106)">` },
+        nice:       { lv: 9,  descript: 'KIRA★KIRA',      code: '(bmoCAIAsgIgB)' },
+        best:       { lv: 10, descript: '',               code: '(bmoCAIASgF6AiwE)' },
+        ultra:      { lv: 11, descript: '君は薔薇より美しい', code: '(bmoCAIAKgCyAiwE)' },
+        starrose:   { lv: 12, descript: '',               code: '(bmoCAIAsgDs)' },
+        loverose:   { lv: 13, descript: '心之壁瓦解',       html: `<img src="/img/smiles/tv_500/bgm_503.png" class="smile" smileid="503" alt="(bgm503)">` },
+        blindrose:  { lv: 14, descript: '',               code: '(bmoCAIAggDs)' },
+        blindheart: { lv: 15, descript: '',               html: `<img src="/img/smiles/tv_vs/bgm_201.png" class="smile" smileid="201" alt="(bgm201)">` },
+        gquuuuuux:  { lv: 16, descript: '',               code: '(bmoCAIAggEGARA)' },
+    }
+
+    const levelEmos = Object.values(emoMap).filter(e => e.descript || e.html || e.code)
+        .reduce((arr, e) => { arr[e.lv] = e; return arr }, new Array(17))
+
+    function getEmoHtml(emo) {
+        if (emo.html) return emo.html
+        return `<span class="bmo" data-code="${emo.code}"></span>`
+    }
+
+    async function renderBmoji() {
+        if (!window.bmoji) {
+            await new Promise((resolve, reject) => {
+                const s = document.createElement('script')
+                s.src = `/js/lib/bmo/bmo.js?${window.CHOBITS_VER || ''}`
+                s.onload = resolve
+                s.onerror = reject
+                document.head.appendChild(s)
+            })
+        }
+        document.querySelectorAll('[data-code]').forEach(el => {
+            if (!el.querySelector('img')) {
+                window.bmoji.render(el, { width: 21, height: 21 })
+            }
+        })
+    }
+
     // ─── 核心分析引擎 ───
 
     const analyze = (() => {
@@ -537,6 +584,30 @@
                 confidence: count / (count + 30),
                 count,
                 variance,
+            }
+        }
+
+        function calc_friend_level(result) {
+            const { rating_simi, my_public_simi, his_public_simi } = result
+
+            const count = rating_simi.count
+            if (count === 0) return { level: 0, score: 0, components: {} }
+
+            const base = rating_simi.cosine_norm
+            const confidence = rating_simi.confidence
+
+            const my_pub = Math.max(0, my_public_simi.cosine_norm)
+            const his_pub = Math.max(0, his_public_simi.cosine_norm)
+            const penalty = my_pub * his_pub
+
+            const raw_score = base * (1 - 0.2 * penalty)
+            const final_score = Math.max(0, Math.min(1, raw_score * (0.5 + 0.5 * confidence)))
+            const level = Math.round(final_score * 16)
+
+            return {
+                level,
+                score: Math.round(final_score * 100),
+                components: { base, penalty, confidence, raw_score },
             }
         }
 
@@ -810,6 +881,9 @@
             const his_public_simi = calc_public_simi(his_collections)
             const rating_simi = calc_rating_simi(intersections, my_std_frac_map, his_std_frac_map)
 
+            const temp_result = { rating_simi, my_public_simi, his_public_simi, common_love_list, common_hate_list, niche_list }
+            const friend_level = calc_friend_level(temp_result)
+
             return {
                 diff_high_list,
                 common_love_list,
@@ -840,6 +914,7 @@
                 my_public_simi,
                 his_public_simi,
                 rating_simi,
+                friend_level,
                 my_coll_count: my_collections.filter(c => c.type === 2).length,
                 his_coll_count: his_collections.filter(c => c.type === 2).length,
                 my_comment_chars: my_collections.reduce((s, c) => s + (c.comment?.length || 0), 0),
@@ -1270,7 +1345,7 @@
                             }).join('')}
                         </div>
                         <div id="simi-container" style="position: relative;">
-                            <button id="simi-toggle-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">相似度</button>
+                            <button id="simi-toggle-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">好友评级</button>
                             <div id="simi-overlay">
                                 <div style="text-align: center; font-size: 0.8em; color: #888; margin-bottom: 8px;">（实验性质）</div>
                                 <table style="width: 100%; font-size: 0.85em; border-collapse: collapse;">
@@ -1295,6 +1370,25 @@
                                         </tr>`
                                     }).join('')}
                                 </table>
+                                <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee; text-align: center;">
+                                    ${(() => {
+                                        const fl = result.friend_level
+                                        const emo = levelEmos[fl.level] || levelEmos[0]
+                                        return `<span style="font-size: 1.3em;">${getEmoHtml(emo)}</span>
+                                            <span style="font-size: 1.1em; font-weight: 600; margin-left: 6px;">Lv.${fl.level}</span>
+                                            <span style="font-size: 0.9em; color: #888; margin-left: 6px;">${fl.score}分</span>`
+                                    })()}
+                                </div>
+                                <div style="margin-top: 8px; font-size: 0.75em; color: #999; line-height: 1.6; border-top: 1px solid #eee; padding-top: 6px;">
+                                    <div>评分相似度 = Pearson 余弦（消除个人评分习惯差异）</div>
+                                    <div>从众惩罚：公评相似度乘积 ${(result.friend_level.components.penalty * 100).toFixed(0)}%，折扣系数 ${(1 - 0.2 * result.friend_level.components.penalty).toFixed(2)}</div>
+                                    <div>置信度：${result.rating_simi.count}部共同条目，置信度 ${(result.friend_level.components.confidence * 100).toFixed(0)}%</div>
+                                    <div style="margin-top: 4px; font-family: monospace; font-size: 0.9em;">
+                                        score = base × (1 − 0.2 × penalty) × (0.5 + 0.5 × conf)<br>
+                                        = ${(result.friend_level.components.base * 100).toFixed(0)}% × ${(1 - 0.2 * result.friend_level.components.penalty).toFixed(2)} × ${(0.5 + 0.5 * result.friend_level.components.confidence).toFixed(2)}<br>
+                                        = ${result.friend_level.score}%
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1306,6 +1400,8 @@
             </main>`
 
             $page.innerHTML = page_html
+
+            renderBmoji()
 
             // ─── 事件绑定 ───
 
