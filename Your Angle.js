@@ -734,6 +734,41 @@
             return [refract_map, std_frac_map, rate_count_map, left_frac_map, right_frac_map]
         }
 
+        /** 基于公评分数排名的百分位映射，与 std_frac_map 语义对等 */
+        function calc_pub_frac_map(rated) {
+            const scores = rated.map(c => c.subject.score || 0).sort((a, b) => a - b)
+            const total = scores.length
+            if (total === 0) return {}
+            const map = {}
+            let i = 0
+            while (i < total) {
+                const val = scores[i]
+                let j = i
+                while (j < total && scores[j] === val) j++
+                const mid = (i + j - 1) / 2
+                map[val] = mid / (total - 1) - 0.5
+                i = j
+            }
+            return map
+        }
+
+        /** 计算用户评分与公评的余弦相似度 */
+        function calc_pub_simi(collections, std_frac_map) {
+            const rated = collections.filter(c => c.rate > 0)
+            if (rated.length === 0) return 0
+            const pub_frac_map = calc_pub_frac_map(rated)
+            let dot = 0, mySum = 0, pubSum = 0
+            for (const c of rated) {
+                const my = std_frac_map[c.rate] || 0
+                const pub = pub_frac_map[c.subject.score || 0] ?? 0
+                dot += my * pub
+                mySum += my * my
+                pubSum += pub * pub
+            }
+            const denom = Math.sqrt(mySum * pubSum)
+            return denom === 0 ? 0 : dot / denom
+        }
+
         //原版的rate3是指好中差，这里的rate3是标准化分数
         /** @param {Collection[]} collections */
         function calc_id_rate3_map(collections, low_threshold = 3, high_threshold = 7) {
@@ -1017,6 +1052,9 @@
 
             console.log('同步率：', { 一般同步率: rateSimi, 交集同步率: rateSimi2, 距离: disSimiArr })
 
+            const my_pub_simi = calc_pub_simi(my_collections, my_std_frac_map)
+            const his_pub_simi = calc_pub_simi(his_collections, his_std_frac_map)
+
             // Reclassify with current thresholds (user may have changed them during loading)
             const cur_my_low = analyze_config.my_threshold_low
             const cur_my_high = analyze_config.my_threshold_high
@@ -1054,6 +1092,7 @@
                 syncCollnums, syncCollrates, [rateSimi, rateSimi2], disSimiArr,
                 my_collections, his_collections, all_items, _my_collections, _his_collections,
                 my_watched_count, his_watched_count, my_comment_chars, his_comment_chars,
+                my_pub_simi, his_pub_simi,
             ]
 
             return res
@@ -1109,7 +1148,8 @@
             let [full_result, full_my_rate_count_map, full_my_refract_map, full_his_rate_count_map, full_his_refract_map,
                 full_my_left_frac_map, full_his_left_frac_map, full_my_right_frac_map, full_his_right_frac_map, full_syncCollnums, full_syncCollrates, full_rateSimis, full_disSimiArr,
                 full_cached_my_collections, full_cached_his_collections, full_all_items, full_raw_my_collections, full_raw_his_collections,
-                full_my_watched_count, full_his_watched_count, full_my_comment_chars, full_his_comment_chars]
+                full_my_watched_count, full_his_watched_count, full_my_comment_chars, full_his_comment_chars,
+                full_my_pub_simi, full_his_pub_simi]
                 = await analyze.analyze(
                     his_id,
                     my_id,
@@ -1142,6 +1182,8 @@
             const his_watched_count = full_his_watched_count
             const my_comment_chars = full_my_comment_chars
             const his_comment_chars = full_his_comment_chars
+            const my_pub_simi = full_my_pub_simi
+            const his_pub_simi = full_his_pub_simi
 
             // 自动均衡分配好中差区间
             function autoBalanceThresholds(rateMap) {
@@ -2613,20 +2655,8 @@
                 } // end inject block
 
             // Post-await: compute score with full data and update UI
-            async function getMzmRatesim(id) {
-                const [, , , , , , , , , , , rateSimis,] =
-                    await analyze.analyze(id, id,
-                        analyze_config.my_threshold_low,
-                        analyze_config.my_threshold_high,
-                        analyze_config.his_threshold_low,
-                        analyze_config.his_threshold_high
-                    )
-                console.log(`用户${id}的自我相似度:`, rateSimis[0])
-                return rateSimis[0]
-            }
-
-            const my_mzmsim = await getMzmRatesim(my_id)
-            const his_mzmsim = await getMzmRatesim(his_id)
+            const my_mzmsim = my_pub_simi
+            const his_mzmsim = his_pub_simi
 
             // Compute and inject real score
             const realScore = (() => {

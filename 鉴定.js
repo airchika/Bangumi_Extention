@@ -299,6 +299,36 @@
         return rate_count_map
     }
 
+    function calc_std_frac_map(rate_count_map) {
+        const total = Object.values(rate_count_map).reduce((s, v) => s + v, 0)
+        if (total === 0) return { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 }
+        const std_frac_map = { 0: 0 }
+        let curNum = 0
+        for (let i = 1; i <= 10; i++) {
+            std_frac_map[i] = (curNum + rate_count_map[i] / 2) / total - 0.5
+            curNum += rate_count_map[i]
+        }
+        return std_frac_map
+    }
+
+    /** 基于公评分数排名的百分位映射，与 std_frac_map 语义对等 */
+    function calc_pub_frac_map(rated) {
+        const scores = rated.map(c => c.subject.score || 0).sort((a, b) => a - b)
+        const total = scores.length
+        if (total === 0) return {}
+        const map = {}
+        let i = 0
+        while (i < total) {
+            const val = scores[i]
+            let j = i
+            while (j < total && scores[j] === val) j++
+            const mid = (i + j - 1) / 2
+            map[val] = mid / (total - 1) - 0.5
+            i = j
+        }
+        return map
+    }
+
     // ─── 核心分析引擎 ───
 
     const analyze = (() => {
@@ -454,6 +484,62 @@
          * @param {Collection[]} his_col
          * @returns {Object}
          */
+
+        // ── 相似度计算 ──
+
+        function calc_cosine_raw(vec_a, vec_b) {
+            let dot = 0, sum_a = 0, sum_b = 0
+            for (let i = 0; i < vec_a.length; i++) {
+                dot += vec_a[i] * vec_b[i]
+                sum_a += vec_a[i] * vec_a[i]
+                sum_b += vec_b[i] * vec_b[i]
+            }
+            const denom = Math.sqrt(sum_a * sum_b)
+            return denom === 0 ? 0 : dot / denom
+        }
+
+        function calc_public_simi(collections) {
+            const rated = collections.filter(c => c.rate > 0)
+            const count = rated.length
+            if (count === 0) return { cosine_norm: 0, confidence: 0, count: 0, variance: 0 }
+
+            const variance = rated.reduce((s, c) => s + (c.rate - (c.subject.score || 0)) ** 2, 0) / count
+
+            // 皮尔逊余弦：user 侧用 std_frac_map，pub 侧用公评排名百分位
+            const rate_map = calc_rate_count_map(collections)
+            const std_map = calc_std_frac_map(rate_map)
+            const pub_frac_map = calc_pub_frac_map(rated)
+            const pub_vec = rated.map(c => pub_frac_map[c.subject.score || 0] ?? 0)
+            const user_std_vec = rated.map(c => std_map[c.rate] || 0)
+            const cosine_norm = calc_cosine_raw(user_std_vec, pub_vec)
+
+            return {
+                cosine_norm,
+                confidence: count / (count + 50),
+                count,
+                variance,
+            }
+        }
+
+        function calc_rating_simi(intersections, my_std_frac_map, his_std_frac_map) {
+            const count = intersections.length
+            if (count === 0) return { cosine_norm: 0, confidence: 0, count: 0, variance: 0 }
+
+            const variance = intersections.reduce((s, a) => s + (a.my_review.rate - a.his_review.rate) ** 2, 0) / count
+
+            // 皮尔逊余弦
+            const my_std = intersections.map(a => my_std_frac_map[a.my_review.rate] || 0)
+            const his_std = intersections.map(a => his_std_frac_map[a.his_review.rate] || 0)
+            const cosine_norm = calc_cosine_raw(my_std, his_std)
+
+            return {
+                cosine_norm,
+                confidence: count / (count + 30),
+                count,
+                variance,
+            }
+        }
+
         function calc_weak_rating_lists(my_col, his_col) {
             const watching_list = calc_watching_list(my_col, his_col)
             const weak_intersections = calc_weak_intersections(my_col, his_col)
@@ -717,6 +803,13 @@
                 his_watching_list,
             } = calc_weak_rating_lists(my_collections, his_collections)
 
+            // ── 相似度计算 ──
+            const my_std_frac_map = calc_std_frac_map(my_rate_count_map)
+            const his_std_frac_map = calc_std_frac_map(his_rate_count_map)
+            const my_public_simi = calc_public_simi(my_collections)
+            const his_public_simi = calc_public_simi(his_collections)
+            const rating_simi = calc_rating_simi(intersections, my_std_frac_map, his_std_frac_map)
+
             return {
                 diff_high_list,
                 common_love_list,
@@ -744,6 +837,9 @@
                 his_watching_list,
                 my_rate_count_map,
                 his_rate_count_map,
+                my_public_simi,
+                his_public_simi,
+                rating_simi,
                 my_coll_count: my_collections.filter(c => c.type === 2).length,
                 his_coll_count: his_collections.filter(c => c.type === 2).length,
                 my_comment_chars: my_collections.reduce((s, c) => s + (c.comment?.length || 0), 0),
@@ -1052,6 +1148,15 @@
                 #type-filter-menu { background: #fff; border: 1px solid #ccc; }
                 html[data-theme=dark] #type-filter-menu { background: #2c2c2c; border-color: #555; }
                 html[data-theme=dark] #type-filter-menu label:hover { background: #3a3a3a; }
+                #simi-container:hover #simi-overlay { display: block; }
+                #simi-overlay { display: none; position: absolute; top: 100%; right: 0; z-index: 20; background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 420px; }
+                #simi-overlay .simi-header { border-bottom: 1px solid #ddd; }
+                #simi-overlay .simi-row { border-bottom: 1px solid #eee; }
+                html[data-theme=dark] #simi-overlay { background: #2c2c2c; border-color: #555; }
+                html[data-theme=dark] #simi-overlay .simi-header { border-bottom-color: #555; }
+                html[data-theme=dark] #simi-overlay .simi-row { border-bottom-color: #444; }
+                html[data-theme=dark] #simi-overlay th { color: #ccc; }
+                html[data-theme=dark] #simi-overlay td { color: #ddd; }
                 .dual-range-container { position: relative; width: 200px; height: 24px; }
                 .dual-range-container .slider-track { position: absolute; top: 50%; left: 0; right: 0; height: 4px; transform: translateY(-50%); border-radius: 2px; z-index: 1; }
                 .dual-range-container input[type="range"] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 2; margin: 0; }
@@ -1163,6 +1268,34 @@
                                     </div>
                                 </div>`
                             }).join('')}
+                        </div>
+                        <div id="simi-container" style="position: relative;">
+                            <button id="simi-toggle-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">相似度</button>
+                            <div id="simi-overlay">
+                                <div style="text-align: center; font-size: 0.8em; color: #888; margin-bottom: 8px;">（实验性质）</div>
+                                <table style="width: 100%; font-size: 0.85em; border-collapse: collapse;">
+                                    <tr class="simi-header">
+                                        <th style="text-align: left; padding: 4px 8px;"></th>
+                                        <th style="text-align: right; padding: 4px 8px;">方差</th>
+                                        <th style="text-align: right; padding: 4px 8px;">皮尔逊余弦</th>
+                                        <th style="text-align: right; padding: 4px 16px 4px 8px;">置信度</th>
+                                    </tr>
+                                    ${[
+                                        { name: '双方相似度', d: result.rating_simi },
+                                        { name: '我·公评相似度', d: result.my_public_simi },
+                                        { name: '对方·公评相似度', d: result.his_public_simi },
+                                    ].map(({ name, d }) => {
+                                        const conf = (d.confidence * 100).toFixed(0)
+                                        const opacity = (0.4 + 0.6 * d.confidence).toFixed(2)
+                                        return `<tr class="simi-row" style="opacity: ${opacity};">
+                                            <td style="padding: 4px 8px;">${name}</td>
+                                            <td style="text-align: right; padding: 4px 8px;">${d.variance.toFixed(2)}</td>
+                                            <td style="text-align: right; padding: 4px 8px;">${(d.cosine_norm * 100).toFixed(0)}%</td>
+                                            <td style="text-align: right; padding: 4px 16px 4px 8px; opacity: ${opacity};">${conf}% (${d.count}部)</td>
+                                        </tr>`
+                                    }).join('')}
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>
