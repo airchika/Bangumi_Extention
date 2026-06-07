@@ -837,6 +837,11 @@
             const _my_collections = _my_collections_raw
             const _his_collections = his_id === my_id ? get_muzimi_collections(_my_collections) : _his_collections_raw
 
+            const my_watched_count = _my_collections.filter(c => c.type === 2).length
+            const his_watched_count = _his_collections.filter(c => c.type === 2).length
+            const my_comment_chars = _my_collections.reduce((s, c) => s + (c.comment?.length || 0), 0)
+            const his_comment_chars = _his_collections.reduce((s, c) => s + (c.comment?.length || 0), 0)
+
             const my_collections = _my_collections.filter(collection_filter)
             const my_collection_map = Object.fromEntries(my_collections.map((o) => [o.subject_id, o]))
             const [my_id_rate3_map, my_rate_count_map, my_refract_map, my_std_frac_map, my_left_frac_map, my_right_frac_map] = calc_id_rate3_map(my_collections, my_threshold_low, my_threshold_high)
@@ -1048,6 +1053,7 @@
                 result, my_rate_count_map, my_refract_map, his_rate_count_map, his_refract_map, my_left_frac_map, his_left_frac_map, my_right_frac_map, his_right_frac_map,
                 syncCollnums, syncCollrates, [rateSimi, rateSimi2], disSimiArr,
                 my_collections, his_collections, all_items, _my_collections, _his_collections,
+                my_watched_count, his_watched_count, my_comment_chars, his_comment_chars,
             ]
 
             return res
@@ -1102,7 +1108,8 @@
 
             let [full_result, full_my_rate_count_map, full_my_refract_map, full_his_rate_count_map, full_his_refract_map,
                 full_my_left_frac_map, full_his_left_frac_map, full_my_right_frac_map, full_his_right_frac_map, full_syncCollnums, full_syncCollrates, full_rateSimis, full_disSimiArr,
-                full_cached_my_collections, full_cached_his_collections, full_all_items, full_raw_my_collections, full_raw_his_collections]
+                full_cached_my_collections, full_cached_his_collections, full_all_items, full_raw_my_collections, full_raw_his_collections,
+                full_my_watched_count, full_his_watched_count, full_my_comment_chars, full_his_comment_chars]
                 = await analyze.analyze(
                     his_id,
                     my_id,
@@ -1131,6 +1138,10 @@
             raw_my_collections = full_raw_my_collections
             raw_his_collections = full_raw_his_collections
             all_items = full_all_items
+            const my_watched_count = full_my_watched_count
+            const his_watched_count = full_his_watched_count
+            const my_comment_chars = full_my_comment_chars
+            const his_comment_chars = full_his_comment_chars
 
             // 自动均衡分配好中差区间
             function autoBalanceThresholds(rateMap) {
@@ -1328,10 +1339,10 @@
             const _nick2 = cur_user1.nickname || cur_user1.username
             const _maxNickWidth = Math.ceil(Math.max(_tmpCanvas.measureText(_nick1).width, _tmpCanvas.measureText(_nick2).width)) + 'px'
             const collectionRelationBar = `
-              <div class="collection-relation-bar" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 320px; height: 42px; color: #fff; font-size: 0.85em; font-weight: bold; text-shadow: 0 0 2px #000;">
-                <div style="background:#04f; display:grid; place-items:center; border-radius: 4px;">仅 A 收藏 ${syncCollnums[2]}</div>
+              <div class="collection-relation-bar" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 360px; height: 42px; color: #fff; font-size: 0.85em; font-weight: bold; text-shadow: 0 0 2px #000;">
+                <div style="background:#04f; display:grid; place-items:center; border-radius: 4px;"><span>A 看过${my_watched_count}</span><span>吐槽${my_comment_chars}字</span></div>
                 <div style="background:#f40; display:grid; place-items:center; border-radius: 4px;"><span>共同 ${syncCollnums[1]}</span><span>共同打分 ${syncCollnums[0]}</span></div>
-                <div style="background:#04f; display:grid; place-items:center; border-radius: 4px;">仅 B 收藏 ${syncCollnums[3]}</div>
+                <div style="background:#04f; display:grid; place-items:center; border-radius: 4px;"><span>B 看过${his_watched_count}</span><span>吐槽${his_comment_chars}字</span></div>
               </div>
             `
             // 类别按钮和缓存按钮

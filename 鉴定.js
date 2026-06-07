@@ -25,6 +25,10 @@
         show_comments: false,
         current_sort: 'common_love',
         filter_types: [1, 2, 3, 4, 5],
+        my_threshold_low: 4,
+        my_threshold_high: 7,
+        his_threshold_low: 4,
+        his_threshold_high: 7,
     }
 
     // ─── 本地设置缓存 ───
@@ -505,7 +509,21 @@
                     return ar - br
                 })
 
-            return { watching_list, common_new_list, common_old_list, want_recommend_list, want_avoid_list }
+            // 对方在看：对方 type=3，不论我方是否看过
+            const my_col_map = new Map(my_col.map(c => [c.subject_id, c]))
+            const his_watching_list = his_col
+                .filter(c => c.type === 3)
+                .map(c => {
+                    const me = my_col_map.get(c.subject_id)
+                    return {
+                        subject: c.subject,
+                        my_review: me ? { rate: me.rate, comment: me.comment, date: new Date(me.updated_at), type: me.type } : null,
+                        his_review: { rate: c.rate, comment: c.comment, date: new Date(c.updated_at), type: c.type },
+                    }
+                })
+                .sort((a, b) => b.his_review.date - a.his_review.date)
+
+            return { watching_list, common_new_list, common_old_list, want_recommend_list, want_avoid_list, his_watching_list }
         }
 
         /**
@@ -681,6 +699,7 @@
                 common_old_list,
                 want_recommend_list,
                 want_avoid_list,
+                his_watching_list,
             } = calc_weak_rating_lists(my_collections, his_collections)
 
             return {
@@ -707,8 +726,13 @@
                 common_old_list,
                 want_recommend_list,
                 want_avoid_list,
+                his_watching_list,
                 my_rate_count_map,
                 his_rate_count_map,
+                my_coll_count: my_collections.filter(c => c.type === 2).length,
+                his_coll_count: his_collections.filter(c => c.type === 2).length,
+                my_comment_chars: my_collections.reduce((s, c) => s + (c.comment?.length || 0), 0),
+                his_comment_chars: his_collections.reduce((s, c) => s + (c.comment?.length || 0), 0),
             }
         }
 
@@ -770,6 +794,7 @@
                 common_old: result.common_old_list,
                 want_recommend: result.want_recommend_list,
                 want_avoid: result.want_avoid_list,
+                his_watching: result.his_watching_list,
             }
 
             // ─── 构建 UI ───
@@ -995,6 +1020,14 @@
                 #type-filter-menu { background: #fff; border: 1px solid #ccc; }
                 html[data-theme=dark] #type-filter-menu { background: #2c2c2c; border-color: #555; }
                 html[data-theme=dark] #type-filter-menu label:hover { background: #3a3a3a; }
+                .dual-range-container { position: relative; width: 200px; height: 24px; }
+                .dual-range-container .slider-track { position: absolute; top: 50%; left: 0; right: 0; height: 4px; transform: translateY(-50%); border-radius: 2px; z-index: 1; }
+                .dual-range-container input[type="range"] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 2; margin: 0; }
+                .dual-range-container input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 2px; background: #007bff; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0,0,0,0.3); cursor: pointer; pointer-events: auto; margin-top: -5px; }
+                .dual-range-container input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 2px; background: #007bff; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0,0,0,0.3); cursor: pointer; pointer-events: auto; }
+                .dual-range-container input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+                .dual-range-container input[type="range"]::-moz-range-track { height: 4px; background: transparent; border: none; }
+                .percent-bar { user-select: none; }
             </style>
 
             <main class="鉴定_page">
@@ -1003,7 +1036,7 @@
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
                             <span style="color: #888; font-size: 0.9em; margin-right: 2px;">双方一致</span>
                             <button class="sort-tab${analyze_config.current_sort === 'common_love' ? ' active' : ''}" data-sort="common_love">共同喜爱</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'common_hate' ? ' active' : ''}" data-sort="common_hate">共同厌恶</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'common_hate' ? ' active' : ''}" data-sort="common_hate">共同低分</button>
                             <button class="sort-tab${analyze_config.current_sort === 'follow_crowd' ? ' active' : ''}" data-sort="follow_crowd">一致从众</button>
                             <button class="sort-tab${analyze_config.current_sort === 'united_front' ? ' active' : ''}" data-sort="united_front">一致对外</button>
                             <button class="sort-tab${analyze_config.current_sort === 'hot_consensus' ? ' active' : ''}" data-sort="hot_consensus">热门共鸣</button>
@@ -1030,6 +1063,7 @@
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                             <span style="color: #888; font-size: 0.9em; margin-right: 2px;">评分无关</span>
+                            <button class="sort-tab${analyze_config.current_sort === 'his_watching' ? ' active' : ''}" data-sort="his_watching">对方在看</button>
                             <button class="sort-tab${analyze_config.current_sort === 'watching' ? ' active' : ''}" data-sort="watching">共同在看</button>
                             <button class="sort-tab${analyze_config.current_sort === 'common_new' ? ' active' : ''}" data-sort="common_new">共同追新</button>
                             <button class="sort-tab${analyze_config.current_sort === 'common_old' ? ' active' : ''}" data-sort="common_old">共同回忆</button>
@@ -1037,8 +1071,8 @@
                             <button class="sort-tab${analyze_config.current_sort === 'want_avoid' ? ' active' : ''}" data-sort="want_avoid">想看避雷</button>
                         </div>
                     </div>
-                    <div style="width: 300px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0;">
-                        <div style="display: flex; gap: 6px; align-items: center;">
+                    <div id="panel" style="width: 300px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0;">
+                        <div id="panel-filter" style="display: flex; gap: 6px; align-items: center;">
                             <div id="type-filter-dropdown" style="position: relative;">
                                 <button id="type-filter-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">收藏类型 ▾</button>
                                 <div id="type-filter-menu" style="display: none; position: absolute; top: 100%; left: 0; border-radius: 4px; padding: 6px 0; z-index: 10; min-width: 120px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
@@ -1059,20 +1093,45 @@
                                 <option value="0" ${analyze_config.cur_subject_id === 0 ? 'selected' : ''}>全部</option>
                             </select>
                             <select id="display-count-select" style="padding: 4px 8px; font-size: 1em;">
-                                <option value="5" ${analyze_config.display_count === 5 ? 'selected' : ''}>5</option>
-                                <option value="10" ${analyze_config.display_count === 10 ? 'selected' : ''}>10</option>
-                                <option value="20" ${analyze_config.display_count === 20 ? 'selected' : ''}>20</option>
-                                <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>50</option>
+                                <option value="5" ${analyze_config.display_count === 5 ? 'selected' : ''}>前5条</option>
+                                <option value="10" ${analyze_config.display_count === 10 ? 'selected' : ''}>前10条</option>
+                                <option value="20" ${analyze_config.display_count === 20 ? 'selected' : ''}>前20条</option>
+                                <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>前50条</option>
                                 <option value="9999" ${analyze_config.display_count >= 9999 ? 'selected' : ''}>全部</option>
                             </select>
                         </div>
-                        <div style="display: flex; gap: 10px; align-items: center;">
+                        <div id="panel-actions" style="display: flex; gap: 10px; align-items: center;">
                             <button id="force-update-btn" style="padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.9em;">
                                 <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
                                 详细
                             </label>
                             <a href="${FEEDBACK_URL}" id="feedback-link" style="font-size: 0.9em; color: #888; cursor: pointer;">点我反馈</a>
+                        </div>
+                        <div id="panel-threshold" style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
+                            ${['my', 'his'].map(user => {
+                                const low = analyze_config[user + '_threshold_low']
+                                const high = analyze_config[user + '_threshold_high']
+                                const label = user === 'my' ? '我' : '对方'
+                                const collCount = result[user + '_coll_count']
+                                const commentChars = result[user + '_comment_chars']
+                                const stats = `看过${collCount} 吐槽${commentChars}字`
+                                return `
+                                <div class="threshold-slider-row" style="display: flex; gap: 8px; align-items: flex-start;">
+                                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-top: 2px;">
+                                        <span class="threshold-label" data-user="${user}" style="font-size: 0.85em; white-space: nowrap;"></span>
+                                        <span style="font-size: 0.75em; color: #888;">${label} ${stats}</span>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <div class="dual-range-container" data-user="${user}">
+                                            <div class="slider-track"></div>
+                                            <input type="range" class="range-handle range-low" data-user="${user}" min="0" max="10" step="1" value="${low}" />
+                                            <input type="range" class="range-handle range-high" data-user="${user}" min="0" max="10" step="1" value="${high}" />
+                                        </div>
+                                        <div class="percent-bar" data-user="${user}" style="display: flex; width: 200px; height: 16px; overflow: visible; position: relative;"></div>
+                                    </div>
+                                </div>`
+                            }).join('')}
                         </div>
                     </div>
                 </div>
@@ -1146,6 +1205,120 @@
                 analyze_config.display_count = parseInt(e.target.value)
                 save_settings()
                 refreshList()
+            })
+
+            // ── 评分分段滑块 ──
+
+            function autoBalanceThresholds(rateMap) {
+                let total = 0
+                for (let i = 1; i <= 10; i++) total += rateMap[i]
+                if (total === 0) return { low: 4, high: 7 }
+                let bestLow = 4, bestHigh = 7, bestDiff = Infinity
+                for (let lo = 1; lo <= 8; lo++) {
+                    for (let hi = lo + 1; hi <= 9; hi++) {
+                        let low = 0, mid = 0, high = 0
+                        for (let i = 1; i <= 10; i++) {
+                            const c = rateMap[i]
+                            if (i <= lo) low += c
+                            else if (i <= hi) mid += c
+                            else high += c
+                        }
+                        const diff = Math.max(low, mid, high) - Math.min(low, mid, high)
+                        if (diff < bestDiff) {
+                            bestDiff = diff
+                            bestLow = lo
+                            bestHigh = hi
+                        }
+                    }
+                }
+                return { low: bestLow, high: bestHigh }
+            }
+
+            function updateSliderTrack(container, lowVal, highVal) {
+                const track = container.querySelector('.slider-track')
+                const lowPercent = (lowVal / 10 * 100).toFixed(1)
+                const highPercent = (highVal / 10 * 100).toFixed(1)
+                track.style.background = `linear-gradient(to right, #04f 0%, #04f ${lowPercent}%, #fc0 ${lowPercent}%, #fc0 ${highPercent}%, #f40 ${highPercent}%, #f40 100%)`
+            }
+
+            function updateThresholdLabel(labelEl, lowVal, highVal) {
+                const lowPart = lowVal === 0 ? '无差' : `1-${lowVal}差`
+                const midPart = `${lowVal === 0 ? 1 : lowVal + 1}-${highVal === 10 ? 10 : highVal}中`
+                const highPart = highVal === 10 ? '无好' : `${highVal + 1}-10好`
+                labelEl.textContent = `${lowPart} ${midPart} ${highPart}`
+            }
+
+            function updatePercentBar(userType) {
+                const barEl = document.querySelector(`.percent-bar[data-user="${userType}"]`)
+                if (!barEl) return
+                const rateMap = userType === 'my' ? result.my_rate_count_map : result.his_rate_count_map
+                const lowT = analyze_config[userType + '_threshold_low']
+                const highT = analyze_config[userType + '_threshold_high']
+                let total = 0
+                for (let i = 1; i <= 10; i++) total += rateMap[i]
+                if (total === 0) { barEl.innerHTML = '<div style="width:100%;height:100%;background:#ccc;border-radius:3px;"></div>'; return }
+                const lighten = { '#04f': 'rgba(60,130,255,0.5)', '#fc0': 'rgba(180,140,0,0.5)', '#f40': 'rgba(255,123,90,0.5)' }
+                const getColor = (r) => r <= lowT ? '#04f' : r <= highT ? '#fc0' : '#f40'
+                const active = []
+                for (let i = 1; i <= 10; i++) if (rateMap[i] > 0) active.push({ score: i, count: rateMap[i], color: getColor(i) })
+                let html = ''
+                for (let j = 0; j < active.length; j++) {
+                    const { count, color } = active[j]
+                    const prev = j > 0 ? active[j - 1] : null
+                    const next = j < active.length - 1 ? active[j + 1] : null
+                    if (prev && prev.color !== color) {
+                        html += `<div style="width:0;height:100%;border-left:2px solid #ff000000;flex-shrink:0;"></div>`
+                    }
+                    const rL = (!prev || prev.color !== color) ? '2px' : '0'
+                    const rR = (!next || next.color !== color) ? '2px' : '0'
+                    const borderR = (next && next.color === color) ? `border-right:2px solid ${lighten[color]};` : ''
+                    html += `<div style="flex:${count};background:${color};min-width:0;border-radius:${rL} ${rR} ${rR} ${rL};${borderR}"></div>`
+                }
+                barEl.innerHTML = html
+            }
+
+            // 初始化滑块
+            const myBalance = autoBalanceThresholds(result.my_rate_count_map)
+            const hisBalance = autoBalanceThresholds(result.his_rate_count_map)
+            analyze_config.my_threshold_low = myBalance.low
+            analyze_config.my_threshold_high = myBalance.high
+            analyze_config.his_threshold_low = hisBalance.low
+            analyze_config.his_threshold_high = hisBalance.high
+
+            // 同步滑块值和视觉
+            document.querySelectorAll('.range-handle').forEach(input => {
+                const user = input.dataset.user
+                const isLow = input.classList.contains('range-low')
+                input.value = isLow ? analyze_config[user + '_threshold_low'] : analyze_config[user + '_threshold_high']
+            })
+            document.querySelectorAll('.dual-range-container').forEach(container => {
+                const user = container.dataset.user
+                updateSliderTrack(container, analyze_config[user + '_threshold_low'], analyze_config[user + '_threshold_high'])
+                const label = container.closest('.threshold-slider-row').querySelector('.threshold-label')
+                updateThresholdLabel(label, analyze_config[user + '_threshold_low'], analyze_config[user + '_threshold_high'])
+            })
+            updatePercentBar('my')
+            updatePercentBar('his')
+
+            // 滑块事件
+            document.querySelectorAll('.range-handle').forEach(input => {
+                input.addEventListener('input', () => {
+                    const container = input.closest('.dual-range-container')
+                    const user = input.dataset.user
+                    const isLow = input.classList.contains('range-low')
+                    const lowInput = container.querySelector('.range-low')
+                    const highInput = container.querySelector('.range-high')
+                    let lowVal = parseInt(lowInput.value)
+                    let highVal = parseInt(highInput.value)
+                    if (isLow && lowVal >= highVal) { lowVal = highVal - 1; lowInput.value = lowVal }
+                    if (!isLow && highVal <= lowVal) { highVal = lowVal + 1; highInput.value = highVal }
+                    analyze_config[user + '_threshold_low'] = lowVal
+                    analyze_config[user + '_threshold_high'] = highVal
+                    updateSliderTrack(container, lowVal, highVal)
+                    const label = container.closest('.threshold-slider-row').querySelector('.threshold-label')
+                    updateThresholdLabel(label, lowVal, highVal)
+                    updatePercentBar(user)
+                })
             })
 
             // 收藏类型下拉菜单
