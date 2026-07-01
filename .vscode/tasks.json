@@ -1,0 +1,45 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "测试：打开影实测试（默认用户）",
+            "type": "shell",
+            "command": "Start-Process",
+            "args": [
+                "https://bgm.tv/user/wataame?ying-shi-test=1"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "never",
+                "panel": "dedicated",
+                "close": true
+            }
+        },
+        {
+            "label": "测试：选择 Bangumi 用户",
+            "type": "shell",
+            "command": "Start-Process",
+            "args": [
+                "https://bgm.tv/user/${input:bangumiTestUser}?ying-shi-test=1"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "never",
+                "panel": "dedicated",
+                "close": true
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "bangumiTestUser",
+            "type": "promptString",
+            "description": "输入要测试的 Bangumi 用户 ID",
+            "default": "wataame"
+        }
+    ]
+}

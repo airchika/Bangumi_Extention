@@ -1,0 +1,17 @@
+{
+    "hooks": {
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "true",
+                        "commandWindows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/open-test-page.ps1')\"",
+                        "timeout": 10,
+                        "statusMessage": "正在 Edge 中打开影实测试"
+                    }
+                ]
+            }
+        ]
+    }
+}
