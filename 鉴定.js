@@ -35,12 +35,9 @@
 
     const analyze_config = {
         subject_ids: [2],
-        display_count: 10,
-        show_comments: false,
         score_display: 'raw',
-        current_sort: 'common_love',
-        my_filter_types: [1, 2, 3, 4, 5],
-        his_filter_types: [1, 2, 3, 4, 5],
+        my_comment_collapsed: true,
+        current_sort: 'important',
         my_threshold_low: 4,
         my_threshold_high: 7,
         his_threshold_low: 4,
@@ -55,10 +52,14 @@
     const CUSTOM_SORTS_CLOUD_KEY = 'bangumi_extension_custom_sorts_v2'
     const DEVICE_ID_KEY = '鉴定_device_id'
     const IMPORTANT_SUBJECTS_KEY = '鉴定_important_subjects_v1'
-    const FIXED_SORT_KEYS = new Set([
-        'important', 'common_love', 'common_hate', 'diff_high', 'common_new',
-        'his_public_diff', 'his_comment', 'his_love',
-    ])
+    const IMPORTANT_SUBJECTS_PENDING_KEY = '鉴定_important_subjects_pending_v1'
+    const IMPORTANT_SUBJECTS_CLOUD_KEY = 'bangumi_extension_important_subjects_v1'
+    const PRESET_OVERRIDES_KEY = '鉴定_preset_overrides_v1'
+    const RECENT_OPPONENTS_KEY = '鉴定_recent_opponents_v1'
+    const USER_CACHE_TIMES_KEY = '鉴定_user_cache_times_v1'
+    const THRESHOLD_PROFILE_LOCAL_KEY = '鉴定_threshold_profile_v1'
+    const THRESHOLD_PROFILE_CLOUD_KEY = 'bangumi_extension_threshold_profile_v1'
+    const FIXED_SORT_KEYS = new Set(['important', 'discover_important', 'high_sync', 'low_sync', 'common_new', 'wanted_recommendation'])
     const CUSTOM_FACTOR_IDS = new Set([
         'my_rating', 'his_rating', 'agreement', 'my_conformity', 'his_conformity',
         'public_reputation', 'popularity', 'freshness', 'my_recency', 'his_recency',
@@ -68,53 +69,140 @@
     const CUSTOM_SET_MODE_IDS = new Set(['any', 'collected', 'uncollected', 'rated'])
     const CUSTOM_RANGE_IDS = new Set(['public_score', 'collection_total', 'rank', 'subject_date_ts', 'my_comment_chars', 'his_comment_chars'])
 
-    function is_valid_set_mode(user, mode) {
-        return CUSTOM_SET_MODE_IDS.has(mode) || (user === 'my' && mode === 'important')
-    }
-
-    function load_important_subjects() {
+    function load_recent_opponents() {
         try {
-            const value = JSON.parse(localStorage.getItem(IMPORTANT_SUBJECTS_KEY))
-            return new Set(Array.isArray(value) ? value.map(Number).filter(id => Number.isInteger(id) && id > 0) : [])
+            const value = JSON.parse(localStorage.getItem(RECENT_OPPONENTS_KEY))
+            return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
         } catch (error) {
-            return new Set()
+            return {}
         }
     }
 
-    const important_subject_ids = load_important_subjects()
+    const recent_opponents = load_recent_opponents()
+    const user_cache_times = (() => {
+        try {
+            const value = JSON.parse(localStorage.getItem(USER_CACHE_TIMES_KEY))
+            return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+        } catch (error) {
+            return {}
+        }
+    })()
+
+    function mark_opponent_viewed(username) {
+        if (!username) return
+        recent_opponents[username] = Date.now()
+        localStorage.setItem(RECENT_OPPONENTS_KEY, JSON.stringify(recent_opponents))
+    }
+
+    function set_user_cache_time(username, time = Date.now()) {
+        if (!username) return
+        user_cache_times[username] = time
+        localStorage.setItem(USER_CACHE_TIMES_KEY, JSON.stringify(user_cache_times))
+    }
+
+    function delete_user_cache_time(username) {
+        delete user_cache_times[username]
+        localStorage.setItem(USER_CACHE_TIMES_KEY, JSON.stringify(user_cache_times))
+    }
+
+    function format_cache_time(username) {
+        const time = Number(user_cache_times[username])
+        if (!time) return '未知'
+        const days = Math.max(0, Math.floor((Date.now() - time) / 86400000))
+        return days === 0 ? '今天' : `${days}天前`
+    }
+
+    function is_valid_set_mode(user, mode) {
+        return CUSTOM_SET_MODE_IDS.has(mode) || (user === 'my' && ['important', 'not_important'].includes(mode))
+    }
+
+    function parse_important_subject_document(raw, strict = false) {
+        try {
+            if (raw == null || raw === '') return { schemaVersion: 1, subjects: {} }
+            const value = typeof raw === 'string' ? JSON.parse(raw) : raw
+            if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
+                return { schemaVersion: 1, subjects: {} }
+            }
+            // 兼容早期仅保存 ID 数组的本地格式
+            if (Array.isArray(value)) {
+                const subjects = {}
+                for (const raw_id of value) {
+                    const id = Number(raw_id)
+                    if (Number.isInteger(id) && id > 0) subjects[id] = { id, marked: true, updatedAt: 0, deviceId: 'legacy' }
+                }
+                return { schemaVersion: 1, subjects }
+            }
+            if (!value || value.schemaVersion !== 1 || !value.subjects || typeof value.subjects !== 'object' || Array.isArray(value.subjects)) {
+                if (strict) throw new Error('重要番剧云索引版本不兼容')
+                return { schemaVersion: 1, subjects: {} }
+            }
+            const subjects = {}
+            for (const [raw_id, entry] of Object.entries(value.subjects)) {
+                const id = Number(raw_id)
+                const valid = Number.isInteger(id) && id > 0 && entry && Number(entry.id) === id &&
+                    typeof entry.marked === 'boolean' && Number.isFinite(Number(entry.updatedAt)) && typeof entry.deviceId === 'string'
+                if (!valid) {
+                    if (strict) throw new Error(`重要番剧云索引包含无效条目：${raw_id}`)
+                    continue
+                }
+                subjects[id] = { id, marked: entry.marked, updatedAt: Number(entry.updatedAt), deviceId: entry.deviceId }
+            }
+            return { schemaVersion: 1, subjects }
+        } catch (error) {
+            if (strict) throw error
+            return { schemaVersion: 1, subjects: {} }
+        }
+    }
+
+    let important_subject_document = parse_important_subject_document(localStorage.getItem(IMPORTANT_SUBJECTS_KEY))
+    const important_subject_ids = new Set()
+
+    function rebuild_important_subject_ids() {
+        important_subject_ids.clear()
+        for (const entry of Object.values(important_subject_document.subjects)) {
+            if (entry.marked) important_subject_ids.add(entry.id)
+        }
+    }
+
+    rebuild_important_subject_ids()
 
     function persist_important_subjects() {
-        localStorage.setItem(IMPORTANT_SUBJECTS_KEY, JSON.stringify([...important_subject_ids].sort((a, b) => a - b)))
+        localStorage.setItem(IMPORTANT_SUBJECTS_KEY, JSON.stringify(important_subject_document))
+    }
+
+    function load_preset_overrides() {
+        try {
+            const value = JSON.parse(localStorage.getItem(PRESET_OVERRIDES_KEY))
+            if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+            return Object.fromEntries(Object.entries(value).filter(([key, rule]) => FIXED_SORT_KEYS.has(key) && rule && typeof rule === 'object'))
+        } catch (error) {
+            return {}
+        }
+    }
+
+    const preset_rule_overrides = load_preset_overrides()
+
+    function persist_preset_overrides() {
+        localStorage.setItem(PRESET_OVERRIDES_KEY, JSON.stringify(preset_rule_overrides))
     }
 
     function load_settings() {
         try {
             const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY))
             if (saved) {
-                if (typeof saved.display_count === 'number') analyze_config.display_count = saved.display_count
-                if (typeof saved.show_comments === 'boolean') analyze_config.show_comments = saved.show_comments
                 if (saved.score_display === 'raw' || saved.score_display === 'hidden') analyze_config.score_display = saved.score_display
+                if (typeof saved.my_comment_collapsed === 'boolean') analyze_config.my_comment_collapsed = saved.my_comment_collapsed
                 if (Array.isArray(saved.subject_ids)) analyze_config.subject_ids = normalize_subject_ids(saved.subject_ids)
                 else if (typeof saved.cur_subject_id === 'number') analyze_config.subject_ids = normalize_subject_ids(saved.cur_subject_id)
-                if (typeof saved.current_sort === 'string') analyze_config.current_sort = saved.current_sort
-                const legacy_types = Array.isArray(saved.filter_types) ? saved.filter_types : null
-                if (Array.isArray(saved.my_filter_types)) analyze_config.my_filter_types = saved.my_filter_types
-                else if (legacy_types) analyze_config.my_filter_types = [...legacy_types]
-                if (Array.isArray(saved.his_filter_types)) analyze_config.his_filter_types = saved.his_filter_types
-                else if (legacy_types) analyze_config.his_filter_types = [...legacy_types]
             }
         } catch (e) { /* ignore */ }
     }
 
     function save_settings() {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-            display_count: analyze_config.display_count,
-            show_comments: analyze_config.show_comments,
             score_display: analyze_config.score_display,
+            my_comment_collapsed: analyze_config.my_comment_collapsed,
             subject_ids: analyze_config.subject_ids,
-            current_sort: analyze_config.current_sort,
-            my_filter_types: analyze_config.my_filter_types,
-            his_filter_types: analyze_config.his_filter_types,
         }))
     }
 
@@ -132,53 +220,112 @@
     }
 
     const device_id = get_device_id()
-    let custom_sort_document = { schemaVersion: 2, rules: {} }
+    function parse_threshold_profile(raw) {
+        try {
+            const value = typeof raw === 'string' ? JSON.parse(raw) : raw
+            const ratios = value?.ratios
+            if (!ratios || !['low', 'medium', 'high'].every(key => Number.isFinite(Number(ratios[key])) && Number(ratios[key]) >= 0)) return null
+            const total = Number(ratios.low) + Number(ratios.medium) + Number(ratios.high)
+            if (total <= 0) return null
+            return {
+                ratios: { low: Number(ratios.low) / total, medium: Number(ratios.medium) / total, high: Number(ratios.high) / total },
+                updatedAt: Number(value.updatedAt || 0),
+                deviceId: String(value.deviceId || ''),
+            }
+        } catch (error) {
+            return null
+        }
+    }
+
+    let threshold_profile = parse_threshold_profile(localStorage.getItem(THRESHOLD_PROFILE_LOCAL_KEY))
+    let threshold_profile_timer = null
+
+    async function sync_threshold_profile() {
+        if (typeof window.chiiApp?.cloud_settings === 'undefined') return false
+        try {
+            const cloud_profile = parse_threshold_profile(chiiApp.cloud_settings.get(THRESHOLD_PROFILE_CLOUD_KEY))
+            if (cloud_profile && (!threshold_profile || compare_rule_version(cloud_profile, threshold_profile) > 0)) {
+                threshold_profile = cloud_profile
+                localStorage.setItem(THRESHOLD_PROFILE_LOCAL_KEY, JSON.stringify(threshold_profile))
+            }
+            if (threshold_profile && (!cloud_profile || compare_rule_version(threshold_profile, cloud_profile) > 0)) {
+                chiiApp.cloud_settings.update({ [THRESHOLD_PROFILE_CLOUD_KEY]: JSON.stringify(threshold_profile) })
+                await Promise.resolve(chiiApp.cloud_settings.save())
+            }
+            return true
+        } catch (error) {
+            return false
+        }
+    }
+
+    function save_threshold_profile(ratios) {
+        threshold_profile = { ratios, updatedAt: Date.now(), deviceId: device_id }
+        localStorage.setItem(THRESHOLD_PROFILE_LOCAL_KEY, JSON.stringify(threshold_profile))
+        clearTimeout(threshold_profile_timer)
+        threshold_profile_timer = setTimeout(sync_threshold_profile, 800)
+    }
+    let custom_sort_document = { schemaVersion: 4, rules: {} }
+    let custom_sort_data_error = ''
     let cloud_sync_status = 'local'
     let cloud_sync_error = ''
     let cloud_sync_timer = null
+    let important_sync_timer = null
 
     function parse_custom_sort_document(raw, strict = false) {
-        if (raw == null || raw === '') return { schemaVersion: 2, rules: {} }
+        if (raw == null || raw === '') return { schemaVersion: 4, rules: {} }
         let value = raw
         try {
             if (typeof value === 'string') value = JSON.parse(value)
         } catch (error) {
             if (strict) throw new Error('云端自定义规则不是有效 JSON')
-            return { schemaVersion: 2, rules: {} }
+            custom_sort_data_error = '本地规则不是有效 JSON，请重置规则数据'
+            return { schemaVersion: 4, rules: {} }
         }
         if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
-            return { schemaVersion: 2, rules: {} }
+            return { schemaVersion: 4, rules: {} }
         }
-        if (!value || value.schemaVersion !== 2 || !value.rules || typeof value.rules !== 'object' || Array.isArray(value.rules)) {
-            if (strict) throw new Error('云端自定义规则版本不兼容')
-            return { schemaVersion: 2, rules: {} }
+        if (!value || value.schemaVersion !== 4 || !value.rules || typeof value.rules !== 'object' || Array.isArray(value.rules)) {
+            if (strict) throw new Error('规则版本不兼容，请重置规则数据')
+            custom_sort_data_error = '检测到旧版规则数据，请使用“重置规则数据”'
+            return { schemaVersion: 4, rules: {} }
+        }
+        const valid_filters = filters => {
+            filters = filters || {}
+            const valid_tiers = user => Array.isArray(filters[`${user}_tiers`]) && filters[`${user}_tiers`].every(tier => ['unrated', 'low', 'medium', 'high'].includes(tier))
+            const valid_types = user => Array.isArray(filters[`${user}_types`]) && filters[`${user}_types`].every(type => [1, 2, 3, 4, 5].includes(Number(type)))
+            const valid_comments = ['my', 'his'].every(user => ['any', 'has', 'empty'].includes(filters[`${user}_comment`]))
+            const valid_ranges = !filters.ranges || (typeof filters.ranges === 'object' && !Array.isArray(filters.ranges) &&
+                Object.entries(filters.ranges).every(([field, bounds]) => CUSTOM_RANGE_IDS.has(field) && bounds && typeof bounds === 'object'))
+            return valid_tiers('my') && valid_tiers('his') && valid_types('my') && valid_types('his') && valid_comments && valid_ranges
+        }
+        const valid_section = section => {
+            const valid_factors = Array.isArray(section?.factors) && section.factors.every(factor =>
+                factor && CUSTOM_FACTOR_IDS.has(factor.id) && ['positive', 'negative'].includes(factor.direction) && [1, 2, 3].includes(Number(factor.weight))
+            ) && new Set(section.factors.map(factor => factor.id)).size === section.factors.length
+            return section && /^[A-Za-z0-9_-]{1,80}$/.test(section.id) &&
+                typeof section.name === 'string' && section.name.trim() && section.name.length <= 30 &&
+                (section.description == null || (typeof section.description === 'string' && section.description.length <= 300)) &&
+                (section.limit == null || (Number.isInteger(section.limit) && section.limit > 0 && section.limit <= 9999)) &&
+                ['normal', 'muted'].includes(section.appearance) &&
+                section.sets && ['my', 'his'].every(user => is_valid_set_mode(user, section.sets[user])) &&
+                ['raw', 'hidden'].includes(section.scoreMode) && typeof section.missingScoreAsZero === 'boolean' &&
+                valid_filters(section.filters) && valid_factors
         }
         const rules = {}
         for (const [id, rule] of Object.entries(value.rules)) {
-            const valid_factors = Array.isArray(rule?.factors) && rule.factors.every(factor =>
-                factor && CUSTOM_FACTOR_IDS.has(factor.id) &&
-                (factor.direction === 'positive' || factor.direction === 'negative') &&
-                [1, 2, 3].includes(Number(factor.weight))
-            ) && new Set(rule.factors.map(factor => factor.id)).size === rule.factors.length
-            const filters = rule?.filters || {}
-            const valid_tiers = user => !filters[`${user}_tiers`] ||
-                (Array.isArray(filters[`${user}_tiers`]) && filters[`${user}_tiers`].every(tier => ['unrated', 'low', 'medium', 'high'].includes(tier)))
-            const valid_comments = ['my', 'his'].every(user => !filters[`${user}_comment`] || ['any', 'has', 'empty'].includes(filters[`${user}_comment`]))
-            const valid_ranges = !filters.ranges || (filters.ranges && typeof filters.ranges === 'object' && !Array.isArray(filters.ranges) &&
-                Object.entries(filters.ranges).every(([field, bounds]) => CUSTOM_RANGE_IDS.has(field) && bounds && typeof bounds === 'object'))
-            const valid_sets = rule?.sets && ['my', 'his'].every(user => is_valid_set_mode(user, rule.sets[user]))
-            const valid_legacy_scope = CUSTOM_SCOPE_IDS.has(rule?.scope)
-            const valid = /^[A-Za-z0-9_-]{1,80}$/.test(id) &&
-                rule && typeof rule === 'object' && rule.id === id &&
+            const valid = /^[A-Za-z0-9_-]{1,80}$/.test(id) && rule && rule.id === id &&
                 typeof rule.name === 'string' && rule.name.trim() && rule.name.length <= 30 &&
-                (valid_sets || valid_legacy_scope) && valid_factors && valid_tiers('my') && valid_tiers('his') && valid_comments && valid_ranges
+                (rule.description == null || (typeof rule.description === 'string' && rule.description.length <= 300)) &&
+                Array.isArray(rule.sections) && rule.sections.length > 0 && rule.sections.every(valid_section) &&
+                new Set(rule.sections.map(section => section.id)).size === rule.sections.length
             if (!valid) {
                 if (strict) throw new Error(`云端包含无效规则：${id}`)
+                custom_sort_data_error = `本地包含无效规则：${id}`
                 continue
             }
             rules[id] = rule
         }
-        return { schemaVersion: 2, rules }
+        return { schemaVersion: 4, rules }
     }
 
     function load_local_custom_sorts() {
@@ -187,7 +334,7 @@
             ? analyze_config.current_sort.slice('custom:'.length)
             : null
         if (!FIXED_SORT_KEYS.has(analyze_config.current_sort) && (!active_id || !custom_sort_document.rules[active_id] || custom_sort_document.rules[active_id].deletedAt)) {
-            analyze_config.current_sort = 'common_love'
+            analyze_config.current_sort = 'important'
             save_settings()
         }
     }
@@ -202,13 +349,72 @@
         return String(a?.deviceId || '').localeCompare(String(b?.deviceId || ''))
     }
 
+    function merge_important_subject_documents(local_doc, cloud_doc) {
+        const subjects = { ...local_doc.subjects }
+        for (const [id, cloud_entry] of Object.entries(cloud_doc.subjects)) {
+            const local_entry = subjects[id]
+            if (!local_entry || compare_rule_version(cloud_entry, local_entry) > 0) subjects[id] = cloud_entry
+        }
+        return { schemaVersion: 1, subjects }
+    }
+
+    function refresh_important_subject_ui() {
+        if (typeof window.__鉴定_refresh_current_list === 'function') window.__鉴定_refresh_current_list()
+    }
+
+    async function sync_important_subjects() {
+        if (typeof window.chiiApp?.cloud_settings === 'undefined') return false
+        try {
+            const cloud_raw = chiiApp.cloud_settings.get(IMPORTANT_SUBJECTS_CLOUD_KEY)
+            const cloud_doc = parse_important_subject_document(cloud_raw, true)
+            const merged = merge_important_subject_documents(important_subject_document, cloud_doc)
+            const merged_json = JSON.stringify(merged)
+            important_subject_document = merged
+            rebuild_important_subject_ids()
+            persist_important_subjects()
+            if (JSON.stringify(cloud_doc) !== merged_json) {
+                chiiApp.cloud_settings.update({ [IMPORTANT_SUBJECTS_CLOUD_KEY]: merged_json })
+                await Promise.resolve(chiiApp.cloud_settings.save())
+            }
+            localStorage.removeItem(IMPORTANT_SUBJECTS_PENDING_KEY)
+            if (!localStorage.getItem(CUSTOM_SORTS_PENDING_KEY)) set_cloud_sync_status('synced')
+            refresh_important_subject_ui()
+            return true
+        } catch (error) {
+            localStorage.setItem(IMPORTANT_SUBJECTS_PENDING_KEY, '1')
+            set_cloud_sync_status('error', `重要番剧索引同步失败：${error.message || error}`)
+            return false
+        }
+    }
+
+    function schedule_important_subject_sync() {
+        localStorage.setItem(IMPORTANT_SUBJECTS_PENDING_KEY, '1')
+        set_cloud_sync_status('pending')
+        clearTimeout(important_sync_timer)
+        important_sync_timer = setTimeout(sync_important_subjects, 800)
+    }
+
+    function set_important_subject_marked(subject_id, marked) {
+        const id = Number(subject_id)
+        if (!Number.isInteger(id) || id <= 0) return
+        important_subject_document.subjects[id] = {
+            id,
+            marked: !!marked,
+            updatedAt: Date.now(),
+            deviceId: device_id,
+        }
+        rebuild_important_subject_ids()
+        persist_important_subjects()
+        schedule_important_subject_sync()
+    }
+
     function merge_custom_sort_documents(local_doc, cloud_doc) {
         const rules = { ...local_doc.rules }
         for (const [id, cloud_rule] of Object.entries(cloud_doc.rules)) {
             const local_rule = rules[id]
             if (!local_rule || compare_rule_version(cloud_rule, local_rule) > 0) rules[id] = cloud_rule
         }
-        return { schemaVersion: 2, rules }
+        return { schemaVersion: 4, rules }
     }
 
     function get_active_custom_rules() {
@@ -221,7 +427,7 @@
         const button = document.getElementById('custom-cloud-status')
         if (!button) return
         const labels = {
-            local: '☁ 本地', pending: '☁ 待同步', syncing: '☁ 同步中',
+            local: '☁ 云端', pending: '☁ 待同步', syncing: '☁ 同步中',
             synced: '☁ 已同步', error: '☁ 同步失败',
         }
         button.textContent = labels[cloud_sync_status] || labels.local
@@ -236,6 +442,10 @@
     }
 
     async function sync_custom_sorts() {
+        if (custom_sort_data_error) {
+            set_cloud_sync_status('error', custom_sort_data_error)
+            return false
+        }
         if (typeof window.chiiApp?.cloud_settings === 'undefined') {
             set_cloud_sync_status('local', 'Bangumi 云设置不可用，当前使用本地规则')
             return false
@@ -253,7 +463,7 @@
                 await Promise.resolve(chiiApp.cloud_settings.save())
             }
             localStorage.removeItem(CUSTOM_SORTS_PENDING_KEY)
-            set_cloud_sync_status('synced')
+            set_cloud_sync_status(localStorage.getItem(IMPORTANT_SUBJECTS_PENDING_KEY) ? 'pending' : 'synced')
             refresh_custom_rule_ui()
             return true
         } catch (error) {
@@ -298,7 +508,7 @@
         }
         persist_custom_sort_document()
         if (analyze_config.current_sort === `custom:${id}`) {
-            analyze_config.current_sort = 'common_love'
+            analyze_config.current_sort = 'important'
             save_settings()
         }
         schedule_custom_sort_sync()
@@ -309,8 +519,9 @@
     }
 
     load_local_custom_sorts()
-    if (localStorage.getItem(CUSTOM_SORTS_PENDING_KEY)) set_cloud_sync_status('pending')
-    sync_custom_sorts()
+    if (custom_sort_data_error) set_cloud_sync_status('error', custom_sort_data_error)
+    else if (localStorage.getItem(CUSTOM_SORTS_PENDING_KEY) || localStorage.getItem(IMPORTANT_SUBJECTS_PENDING_KEY)) set_cloud_sync_status('pending')
+    sync_custom_sorts().then(sync_important_subjects).then(sync_threshold_profile)
 
     const collTypeMap = {
         '1': '想看',
@@ -369,6 +580,25 @@
         return temp.firstElementChild
     }
 
+    async function fetch_friend_index(username) {
+        const response = await fetchWithTimeout(`/user/${encodeURIComponent(username)}/friends`, {}, 12000)
+        if (!response.ok) throw new Error(`好友页面 HTTP ${response.status}`)
+        const doc = new DOMParser().parseFromString(await response.text(), 'text/html')
+        const friends = new Map()
+        for (const anchor of doc.querySelectorAll('a.avatar[href*="/user/"]')) {
+            const match = new URL(anchor.getAttribute('href'), location.origin).pathname.match(/^\/user\/([^/]+)$/)
+            if (!match) continue
+            const friend_username = decodeURIComponent(match[1])
+            if (!isValidUsernameInput(friend_username) || friend_username === username) continue
+            const row = anchor.closest('li') || anchor.parentElement
+            const nickname = anchor.textContent?.trim() || row?.querySelector('a.l:not(.avatar)')?.textContent?.trim() || friend_username
+            const avatar_node = anchor.querySelector('img, .avatarNeue')
+            const image = avatar_node?.src || (avatar_node?.style.backgroundImage.match(/url\(["']?(.*?)["']?\)/)?.[1] || '')
+            friends.set(friend_username, { username: friend_username, nickname, avatar: image })
+        }
+        return [...friends.values()].sort((a, b) => a.nickname.localeCompare(b.nickname, 'zh-CN'))
+    }
+
     // ─── IndexedDB 缓存层 ───
 
     const api_cache = (() => {
@@ -424,6 +654,72 @@
                 })
             }
 
+            async function getAllUsers() {
+                const db = await open_db()
+                return new Promise((resolve, reject) => {
+                    const users = []
+                    const request = db.transaction(STORE, 'readonly').objectStore(STORE).openCursor()
+                    request.onsuccess = event => {
+                        const cursor = event.target.result
+                        if (!cursor) {
+                            db.close()
+                            resolve(users)
+                            return
+                        }
+                        const key = cursor.key
+                        if (typeof key === 'string' && /^https:\/\/api\.bgm\.tv\/v0\/users\/[^/?]+$/.test(key) && isValidUserPayload(cursor.value)) users.push(cursor.value)
+                        cursor.continue()
+                    }
+                    request.onerror = event => {
+                        db.close()
+                        reject(event.target.error)
+                    }
+                })
+            }
+
+            async function getCachedCollectionUsernames() {
+                const db = await open_db()
+                return new Promise((resolve, reject) => {
+                    const usernames = new Set()
+                    const request = db.transaction(STORE, 'readonly').objectStore(STORE).openKeyCursor()
+                    request.onsuccess = event => {
+                        const cursor = event.target.result
+                        if (!cursor) {
+                            db.close()
+                            resolve(usernames)
+                            return
+                        }
+                        if (typeof cursor.key === 'string') {
+                            const match = cursor.key.match(/^https:\/\/api\.bgm\.tv\/v0\/users\/([^/?]+)\/collections(?:\?|$)/)
+                            if (match) usernames.add(decodeURIComponent(match[1]))
+                        }
+                        cursor.continue()
+                    }
+                    request.onerror = event => {
+                        db.close()
+                        reject(event.target.error)
+                    }
+                })
+            }
+
+            async function deleteUserCache(username) {
+                const db = await open_db()
+                return new Promise((resolve, reject) => {
+                    const transaction = db.transaction(STORE, 'readwrite')
+                    const object_store = transaction.objectStore(STORE)
+                    const request = object_store.openCursor()
+                    request.onsuccess = event => {
+                        const cursor = event.target.result
+                        if (!cursor) return
+                        const key = String(cursor.key)
+                        if (key === transUserKey(username) || key.startsWith(`${transUserKey(username)}/collections`)) cursor.delete()
+                        cursor.continue()
+                    }
+                    transaction.oncomplete = () => { db.close(); resolve() }
+                    transaction.onerror = () => { db.close(); reject(transaction.error) }
+                })
+            }
+
             function transCollKey(user_id, subject_type) {
                 return subject_type > 0
                     ? `https://api.bgm.tv/v0/users/${user_id}/collections?subject_type=${subject_type}`
@@ -434,11 +730,31 @@
                 return `https://api.bgm.tv/v0/users/${username}`
             }
 
-            return { create, get, set, deleteByKey, transCollKey, transUserKey }
+            function transSubjectKey(subject_id) {
+                return `https://api.bgm.tv/v0/subjects/${subject_id}`
+            }
+
+            return { create, get, set, deleteByKey, deleteUserCache, getAllUsers, getCachedCollectionUsernames, transCollKey, transUserKey, transSubjectKey }
         })()
 
         return store
     })()
+
+    async function prune_cached_opponents(self_username) {
+        const unique_users = new Map((await api_cache.getAllUsers()).map(user => [user.username, user]))
+        const opponents = [...unique_users.keys()]
+            .filter(username => username !== self_username)
+            .sort((a, b) => Number(recent_opponents[b] || 0) - Number(recent_opponents[a] || 0) || a.localeCompare(b))
+        for (const username of opponents.slice(20)) {
+            await api_cache.deleteUserCache(username)
+            delete recent_opponents[username]
+            delete user_cache_times[username]
+        }
+        if (opponents.length > 20) {
+            localStorage.setItem(RECENT_OPPONENTS_KEY, JSON.stringify(recent_opponents))
+            localStorage.setItem(USER_CACHE_TIMES_KEY, JSON.stringify(user_cache_times))
+        }
+    }
 
     // ─── API 数据加载 ───
 
@@ -486,6 +802,7 @@
                             all.filter(collection => collection.subject_type === id)
                         )
                     }
+                    set_user_cache_time(username)
                     return all.filter(collection => subject_ids.includes(collection.subject_type))
                 } catch (e) {
                     throw `自动获取${username}的全部类型缓存失败: ${e.message}`
@@ -500,6 +817,7 @@
                     await api_cache.set(api_cache.transCollKey(username, id), collections)
                     return collections
                 }))
+                set_user_cache_time(username)
                 return collections_by_type.flat()
             } catch (e) {
                 throw `自动获取${username}的${get_subject_selection_label()}缓存失败: ${e.message}`
@@ -536,7 +854,18 @@
             return user
         }
 
-        return { get_coll, get_user }
+        async function get_subject(subject_id) {
+            const cache_key = api_cache.transSubjectKey(subject_id)
+            const cached = await api_cache.get(cache_key)
+            if (cached?.id) return cached
+            const response = await fetchWithTimeout(cache_key, {}, 8000)
+            if (!response.ok) throw new Error(`作品 ${subject_id} HTTP ${response.status}`)
+            const subject = await response.json()
+            await api_cache.set(cache_key, subject)
+            return subject
+        }
+
+        return { get_coll, get_user, get_subject }
     })()
 
     // ─── 评分统计 ───
@@ -801,11 +1130,25 @@
 
             const my_collection_map = new Map(my_collections.map(c => [c.subject_id, c]))
             const his_collection_map = new Map(his_collections.map(c => [c.subject_id, c]))
-            const all_subject_ids = new Set([...my_collection_map.keys(), ...his_collection_map.keys()])
+            const collection_subject_ids = new Set([...my_collection_map.keys(), ...his_collection_map.keys()])
+            const missing_important_ids = [...important_subject_ids].filter(id => !collection_subject_ids.has(id))
+            const extra_subjects = new Map()
+            let subject_cursor = 0
+            const subject_worker = async () => {
+                while (subject_cursor < missing_important_ids.length) {
+                    const id = missing_important_ids[subject_cursor++]
+                    try {
+                        const subject = await load_manager_async.get_subject(id)
+                        if (analyze_config.subject_ids.includes(Number(subject.type))) extra_subjects.set(id, subject)
+                    } catch (error) { /* 单个重要条目失败不阻断整体比较 */ }
+                }
+            }
+            await Promise.all(Array.from({ length: Math.min(4, missing_important_ids.length) }, subject_worker))
+            const all_subject_ids = new Set([...collection_subject_ids, ...extra_subjects.keys()])
             const comparison_items = [...all_subject_ids].map(subject_id => {
                 const my_collection = my_collection_map.get(subject_id)
                 const his_collection = his_collection_map.get(subject_id)
-                const subject = my_collection?.subject || his_collection?.subject || {}
+                const subject = my_collection?.subject || his_collection?.subject || extra_subjects.get(subject_id) || {}
                 const my_review = to_review(my_collection, my_hidden_map)
                 const his_review = to_review(his_collection, his_hidden_map)
                 const public_score = Number(subject.score || 0) || null
@@ -870,17 +1213,26 @@
                 }
             })
 
-            // 按收藏类型过滤
-            const my_active_types = new Set(analyze_config.my_filter_types)
-            const his_active_types = new Set(analyze_config.his_filter_types)
-            const my_filtered = my_collections.filter(c => my_active_types.has(c.type))
-            const his_filtered = his_collections.filter(c => his_active_types.has(c.type))
+            // 大众隐藏分：大众评分在当前双方收藏并集中的中位百分位
+            const public_hidden_frac_map = calc_pub_frac_map(
+                comparison_items.filter(item => item.public_score != null).map(item => ({ subject: { score: item.public_score } }))
+            )
+            for (const item of comparison_items) {
+                const fraction = item.public_score == null ? null : public_hidden_frac_map[item.public_score]
+                item.public_hidden = fraction == null ? null : Math.round((fraction + 0.5) * 100)
+            }
+
+            // 收藏状态筛选已归入各规则；全局统计始终基于完整收藏集
+            const my_filtered = my_collections
+            const his_filtered = his_collections
 
             const my_rate_count_map = calc_rate_count_map(my_filtered)
             const his_rate_count_map = calc_rate_count_map(his_filtered)
             const intersections = calc_intersections(my_filtered, his_filtered)
             const his_filtered_subject_ids = new Set(his_filtered.map(c => c.subject_id))
             const common_collection_count = my_filtered.filter(c => his_filtered_subject_ids.has(c.subject_id)).length
+            const his_watched_subject_ids = new Set(his_collections.filter(c => c.type === 2).map(c => c.subject_id))
+            const common_watched_count = my_collections.filter(c => c.type === 2 && his_watched_subject_ids.has(c.subject_id)).length
 
             // ── 相似度计算 ──
             const my_std_frac_map = calc_std_frac_map(my_rate_count_map)
@@ -905,8 +1257,11 @@
                 his_all_rate_count_map,
                 common_collection_count,
                 common_rating_count: intersections.length,
-                my_coll_count: my_collections.filter(c => c.type === 2).length,
-                his_coll_count: his_collections.filter(c => c.type === 2).length,
+                my_collection_count: my_collections.length,
+                his_collection_count: his_collections.length,
+                my_watched_count: my_collections.filter(c => c.type === 2).length,
+                his_watched_count: his_collections.filter(c => c.type === 2).length,
+                common_watched_count,
                 my_comment_chars: my_collections.reduce((s, c) => s + count_text_chars(c.comment), 0),
                 his_comment_chars: his_collections.reduce((s, c) => s + count_text_chars(c.comment), 0),
             }
@@ -920,6 +1275,7 @@
     let analyzeLoading = false
     let self_username = ''
     let visited_username = ''
+    let comparison_username = ''
     let cur_user1, cur_user2
     let mobile_settings_open = false
 
@@ -932,11 +1288,17 @@
         if (!cur_user1 || !cur_user2) {
             visited_username = document.querySelector('#headerProfile .name small').textContent.slice(1)
             self_username = CHOBITS_USERNAME
+            if (!comparison_username) comparison_username = visited_username
         }
         if (force || !cur_user1 || !cur_user2) {
-            cur_user1 = await load_manager_async.get_user(visited_username, force)
-            cur_user2 = await load_manager_async.get_user(self_username, force)
+            // 强制更新收藏缓存时同时刷新双方头像、昵称等用户资料
+            ;[cur_user1, cur_user2] = await Promise.all([
+                load_manager_async.get_user(comparison_username || visited_username, force),
+                load_manager_async.get_user(self_username, force),
+            ])
         }
+        mark_opponent_viewed(cur_user1.username)
+        await prune_cached_opponents(self_username)
 
         const my_id = cur_user2.username
         const his_id = cur_user1.username
@@ -946,6 +1308,7 @@
         try {
             $page.innerHTML = `<section class="鉴定_page" style="padding: 20px;">加载中...</section>`
 
+            await sync_threshold_profile()
             const result = await analyze.run(my_id, his_id, force)
 
             const SET_MODE_DEFS = {
@@ -954,6 +1317,7 @@
                 uncollected: '未收藏（并集内）',
                 rated: '已评分',
                 important: '重要番剧',
+                not_important: '未标重要番剧',
             }
 
             const LEGACY_SCOPE_SETS = {
@@ -973,8 +1337,8 @@
                 public_reputation: { group: '大众', label: '大众口碑', positive: '口碑更好', negative: '口碑更差', relative: true },
                 popularity: { group: '大众', label: '热门度', positive: '更热门', negative: '更冷门', relative: true },
                 freshness: { group: '时间', label: '作品新鲜度', positive: '作品更新', negative: '作品更旧', relative: true },
-                my_recency: { group: '时间', label: '我的收藏进度', positive: '最近收藏', negative: '更早收藏', relative: true },
-                his_recency: { group: '时间', label: '对方收藏进度', positive: '最近收藏', negative: '更早收藏', relative: true },
+                my_recency: { group: '时间', label: '我的收藏新鲜度', positive: '最近收藏', negative: '更早收藏', relative: true },
+                his_recency: { group: '时间', label: '对方收藏新鲜度', positive: '最近收藏', negative: '更早收藏', relative: true },
                 my_comment: { group: '互动', label: '我的吐槽量', positive: '字数更多', negative: '字数更少', relative: true },
                 his_comment: { group: '互动', label: '对方吐槽量', positive: '字数更多', negative: '字数更少', relative: true },
             }
@@ -997,15 +1361,13 @@
             }
 
             function get_rule_sets(rule) {
-                if (rule?.sets && is_valid_set_mode('my', rule.sets.my) && is_valid_set_mode('his', rule.sets.his)) {
-                    return rule.sets
-                }
-                return LEGACY_SCOPE_SETS[rule?.scope] || LEGACY_SCOPE_SETS.common_rated
+                return rule.sets
             }
 
             function set_mode_matches(item, user, mode) {
                 const review = item[`${user}_review`]
                 if (mode === 'important') return important_subject_ids.has(Number(item.subject.id))
+                if (mode === 'not_important') return !important_subject_ids.has(Number(item.subject.id))
                 if (mode === 'collected') return !!review
                 if (mode === 'uncollected') return !review
                 if (mode === 'rated') return review?.rate > 0
@@ -1016,16 +1378,6 @@
                 return set_mode_matches(item, 'my', sets.my) && set_mode_matches(item, 'his', sets.his)
             }
 
-            function temporary_status_matches(item, sets) {
-                const matches = (review, selected, mode) => {
-                    if (mode === 'uncollected' || selected.length === 0 || selected.length === 5) return true
-                    if (!review) return mode === 'any' || mode === 'important'
-                    return selected.includes(review.type)
-                }
-                return matches(item.my_review, analyze_config.my_filter_types, sets.my) &&
-                    matches(item.his_review, analyze_config.his_filter_types, sets.his)
-            }
-
             function get_range_value(item, field) {
                 if (field === 'my_comment_chars') return item.my_review?.comment_chars
                 if (field === 'his_comment_chars') return item.his_review?.comment_chars
@@ -1033,8 +1385,18 @@
             }
 
             function saved_filter_matches(item, filters = {}) {
-                const tier_match = (user, selected) => !selected?.length || selected.includes(get_tier(user, item[`${user}_review`]))
+                const tier_match = (user, selected) => {
+                    if (!Array.isArray(selected) || selected.length === 4) return true
+                    if (selected.length === 0) return false
+                    return selected.includes(get_tier(user, item[`${user}_review`]))
+                }
+                const type_match = (user, selected) => {
+                    if (!Array.isArray(selected) || selected.length === 5) return true
+                    if (selected.length === 0) return false
+                    return selected.includes(item[`${user}_review`]?.type)
+                }
                 if (!tier_match('my', filters.my_tiers) || !tier_match('his', filters.his_tiers)) return false
+                if (!type_match('my', filters.my_types) || !type_match('his', filters.his_types)) return false
                 for (const user of ['my', 'his']) {
                     const mode = filters[`${user}_comment`] || 'any'
                     const review = item[`${user}_review`]
@@ -1054,12 +1416,19 @@
                 return true
             }
 
-            function factor_source_value(item, factor_id) {
-                if (factor_id === 'my_rating') return item.my_review?.hidden
-                if (factor_id === 'his_rating') return item.his_review?.hidden
-                if (factor_id === 'agreement') return item.hidden_gap == null ? null : 100 - item.hidden_gap
-                if (factor_id === 'my_conformity') return item.my_review?.hidden == null || item.my_public_percentile == null ? null : 100 - Math.abs(item.my_review.hidden - item.my_public_percentile)
-                if (factor_id === 'his_conformity') return item.his_review?.hidden == null || item.his_public_percentile == null ? null : 100 - Math.abs(item.his_review.hidden - item.his_public_percentile)
+            function factor_source_value(item, factor_id, rule) {
+                const use_raw = rule?.scoreMode === 'raw'
+                if (factor_id === 'my_rating') return use_raw ? (item.my_review?.rate > 0 ? item.my_review.rate * 10 : null) : item.my_review?.hidden
+                if (factor_id === 'his_rating') return use_raw ? (item.his_review?.rate > 0 ? item.his_review.rate * 10 : null) : item.his_review?.hidden
+                if (factor_id === 'agreement') return use_raw
+                    ? (item.raw_gap == null ? null : 100 - item.raw_gap * 10)
+                    : (item.hidden_gap == null ? null : 100 - item.hidden_gap)
+                if (factor_id === 'my_conformity') return use_raw
+                    ? (item.my_review?.rate > 0 && item.public_score != null ? 100 - Math.abs(item.my_review.rate - item.public_score) * 10 : null)
+                    : (item.my_review?.hidden == null || item.my_public_percentile == null ? null : 100 - Math.abs(item.my_review.hidden - item.my_public_percentile))
+                if (factor_id === 'his_conformity') return use_raw
+                    ? (item.his_review?.rate > 0 && item.public_score != null ? 100 - Math.abs(item.his_review.rate - item.public_score) * 10 : null)
+                    : (item.his_review?.hidden == null || item.his_public_percentile == null ? null : 100 - Math.abs(item.his_review.hidden - item.his_public_percentile))
                 if (factor_id === 'public_reputation') return item.public_score
                 if (factor_id === 'popularity') return item.collection_total
                 if (factor_id === 'freshness') return item.subject_date_ts
@@ -1071,7 +1440,7 @@
             }
 
             function factor_value_for_rule(item, factor_id, rule) {
-                const value = factor_source_value(item, factor_id)
+                const value = factor_source_value(item, factor_id, rule)
                 if (value != null) return value
                 if (rule?.missingScoreAsZero === true && ['my_rating', 'his_rating', 'agreement'].includes(factor_id)) return 0
                 return null
@@ -1095,22 +1464,21 @@
                 return map
             }
 
-            function evaluate_rule(rule) {
-                const factors = (rule?.factors || []).filter(factor => FACTOR_DEFS[factor.id])
-                const sets = get_rule_sets(rule)
-                const scoped = result.comparison_items.filter(item => sets_match(item, sets))
-                const filtered = scoped.filter(item => saved_filter_matches(item, rule?.filters) && temporary_status_matches(item, sets))
-                const eligible = filtered.filter(item => factors.every(factor => factor_value_for_rule(item, factor.id, rule) != null))
+            function evaluate_section(section, candidates) {
+                const factors = (section.factors || []).filter(factor => FACTOR_DEFS[factor.id])
+                const scoped = candidates.filter(item => sets_match(item, section.sets))
+                const filtered = scoped.filter(item => saved_filter_matches(item, section.filters))
+                const eligible = filtered.filter(item => factors.every(factor => factor_value_for_rule(item, factor.id, section) != null))
                 if (factors.length === 0) {
                     const items = [...eligible].sort((a, b) =>
                         (b.his_review?.date?.getTime?.() || 0) - (a.his_review?.date?.getTime?.() || 0) ||
                         Number(a.subject.id || 0) - Number(b.subject.id || 0)
                     )
-                    return { items, scopedCount: scoped.length, filteredCount: filtered.length, excludedCount: 0 }
+                    return { items, matchedItems: filtered, scopedCount: scoped.length, filteredCount: filtered.length, excludedCount: 0 }
                 }
                 const percentile_maps = Object.fromEntries(
                     factors.filter(factor => FACTOR_DEFS[factor.id].relative)
-                        .map(factor => [factor.id, percentile_map(eligible, factor.id, rule)])
+                        .map(factor => [factor.id, percentile_map(eligible, factor.id, section)])
                 )
                 const items = eligible.map(item => {
                     let weighted_sum = 0
@@ -1118,7 +1486,7 @@
                     const factor_scores = factors.map(factor => {
                         const raw = FACTOR_DEFS[factor.id].relative
                             ? percentile_maps[factor.id].get(item)
-                            : factor_value_for_rule(item, factor.id, rule)
+                            : factor_value_for_rule(item, factor.id, section)
                         const preferred = factor.direction === 'negative' ? 100 - raw : raw
                         const weight = Number(factor.weight) || 1
                         weighted_sum += preferred * weight
@@ -1127,30 +1495,100 @@
                     })
                     return { ...item, _custom_score: weighted_sum / weight_sum, _factor_scores: factor_scores }
                 }).sort((a, b) => b._custom_score - a._custom_score || Number(a.subject.id || 0) - Number(b.subject.id || 0))
-                return { items, scopedCount: scoped.length, filteredCount: filtered.length, excludedCount: filtered.length - eligible.length }
+                return { items, matchedItems: filtered, scopedCount: scoped.length, filteredCount: filtered.length, excludedCount: filtered.length - eligible.length }
             }
 
-            const PRESET_RULES = {
-                important: { name: '重要番剧', sets: { my: 'important', his: 'any' }, filters: {}, missingScoreAsZero: true, factors: [{ id: 'my_rating', direction: 'positive', weight: 2 }, { id: 'his_rating', direction: 'positive', weight: 2 }, { id: 'agreement', direction: 'positive', weight: 1 }] },
-                common_love: { name: '共同喜欢', sets: { my: 'rated', his: 'rated' }, filters: { my_tiers: ['medium', 'high'], his_tiers: ['medium', 'high'] }, factors: [{ id: 'my_rating', direction: 'positive', weight: 2 }, { id: 'his_rating', direction: 'positive', weight: 2 }, { id: 'agreement', direction: 'positive', weight: 1 }] },
-                common_hate: { name: '共同低分', sets: { my: 'rated', his: 'rated' }, filters: { my_tiers: ['low'], his_tiers: ['low'] }, factors: [{ id: 'my_rating', direction: 'negative', weight: 2 }, { id: 'his_rating', direction: 'negative', weight: 2 }, { id: 'agreement', direction: 'positive', weight: 1 }] },
-                diff_high: { name: '分歧最大', sets: { my: 'rated', his: 'rated' }, filters: {}, factors: [{ id: 'agreement', direction: 'negative', weight: 3 }] },
-                common_new: { name: '共同追新', sets: { my: 'collected', his: 'collected' }, filters: {}, factors: [{ id: 'freshness', direction: 'positive', weight: 3 }, { id: 'my_recency', direction: 'positive', weight: 1 }, { id: 'his_recency', direction: 'positive', weight: 1 }] },
-                his_public_diff: { name: '对方独特', sets: { my: 'any', his: 'rated' }, filters: {}, factors: [{ id: 'his_conformity', direction: 'negative', weight: 3 }, { id: 'his_rating', direction: 'positive', weight: 1 }] },
-                his_comment: { name: '对方吐槽', sets: { my: 'any', his: 'collected' }, filters: { his_comment: 'has' }, factors: [{ id: 'his_comment', direction: 'positive', weight: 3 }] },
-                his_love: { name: '对方高分', sets: { my: 'any', his: 'rated' }, filters: { his_tiers: ['medium', 'high'] }, factors: [{ id: 'his_rating', direction: 'positive', weight: 3 }] },
+            function evaluate_rule(rule, expanded_sections = new Set()) {
+                const claimed_ids = new Set()
+                const sections = rule.sections.map(section => {
+                    const candidates = result.comparison_items.filter(item => !claimed_ids.has(Number(item.subject.id)))
+                    const evaluation = evaluate_section(section, candidates)
+                    evaluation.matchedItems.forEach(item => claimed_ids.add(Number(item.subject.id)))
+                    const visible_items = section.limit == null || expanded_sections.has(section.id)
+                        ? evaluation.items
+                        : evaluation.items.slice(0, section.limit)
+                    return { section, ...evaluation, items: visible_items, totalSortedCount: evaluation.items.length }
+                })
+                return {
+                    sections,
+                    items: sections.flatMap(({ section, items, totalSortedCount }) => items.map((item, index) => ({
+                        ...item,
+                        _section_id: section.id,
+                        _section_name: section.name,
+                        _section_description: section.description || '',
+                        _section_muted: section.appearance === 'muted',
+                        _section_start: index === 0,
+                        _section_end: index === items.length - 1,
+                        _section_hidden_count: index === items.length - 1 ? Math.max(0, totalSortedCount - items.length) : 0,
+                        _multi_section: rule.sections.length > 1,
+                    }))),
+                }
+            }
+
+            const default_filter_state = () => ({
+                my_types: [1, 2, 3, 4, 5], his_types: [1, 2, 3, 4, 5],
+                my_tiers: ['unrated', 'low', 'medium', 'high'], his_tiers: ['unrated', 'low', 'medium', 'high'],
+                my_comment: 'any', his_comment: 'any',
+            })
+
+            const make_section = (id, name, overrides = {}) => ({
+                id, name, description: '', limit: 20, appearance: 'normal',
+                sets: { my: 'rated', his: 'rated' }, filters: default_filter_state(),
+                scoreMode: 'hidden', missingScoreAsZero: false, factors: [], ...overrides,
+            })
+            const rating_factor = (id, direction, weight) => ({ id, direction, weight })
+            const DEFAULT_PRESET_RULES = {
+                important: { name: '重要番剧', description: '按对方是否收藏分段展示我标记的重要番剧。', sections: [
+                    make_section('opponent_collected', '对方已收藏', { sets: { my: 'important', his: 'collected' }, scoreMode: 'raw', missingScoreAsZero: true, factors: [rating_factor('his_rating', 'positive', 3)] }),
+                    make_section('opponent_uncollected', '对方未收藏', { sets: { my: 'important', his: 'uncollected' }, scoreMode: 'raw', missingScoreAsZero: true, appearance: 'muted', factors: [rating_factor('my_rating', 'positive', 3)] }),
+                ] },
+                discover_important: { name: '发现重要番剧', description: '先列出已标重要番剧，再从我的好评与差评中发现和大众评价偏差较大的候选。', sections: [
+                    make_section('marked_important', '已标重要番剧', { sets: { my: 'important', his: 'any' }, scoreMode: 'raw', missingScoreAsZero: true, factors: [rating_factor('my_rating', 'positive', 3)] }),
+                    make_section('discover_my_high', '我的好评发现', { sets: { my: 'not_important', his: 'any' }, filters: { ...default_filter_state(), my_tiers: ['high'] }, factors: [rating_factor('my_conformity', 'negative', 3)] }),
+                    make_section('discover_my_low', '我的差评发现', { sets: { my: 'not_important', his: 'any' }, filters: { ...default_filter_state(), my_tiers: ['low'] }, factors: [rating_factor('my_conformity', 'negative', 3)] }),
+                ] },
+                high_sync: { name: '高同步率', description: '依次展示双方共同好评、共同差评与共同中评。', sections: [
+                    make_section('both_high', '共同好评', { filters: { ...default_filter_state(), my_tiers: ['high'], his_tiers: ['high'] }, factors: [rating_factor('my_rating', 'positive', 2), rating_factor('his_rating', 'positive', 2), rating_factor('agreement', 'positive', 1)] }),
+                    make_section('both_low', '共同差评', { filters: { ...default_filter_state(), my_tiers: ['low'], his_tiers: ['low'] }, factors: [rating_factor('my_rating', 'negative', 2), rating_factor('his_rating', 'negative', 2), rating_factor('agreement', 'positive', 1)] }),
+                    make_section('both_medium', '共同中评', { filters: { ...default_filter_state(), my_tiers: ['medium'], his_tiers: ['medium'] }, factors: [rating_factor('agreement', 'positive', 3)] }),
+                ] },
+                low_sync: { name: '低同步率', description: '按评价方向分段展示双方口味分歧。', sections: [
+                    ['my_high_his_low', '我好他差', 'high', 'low'], ['my_low_his_high', '我差他好', 'low', 'high'],
+                    ['my_medium_his_low', '我中他差', 'medium', 'low'], ['my_low_his_medium', '我差他中', 'low', 'medium'],
+                    ['my_high_his_medium', '我好他中', 'high', 'medium'], ['my_medium_his_high', '我中他好', 'medium', 'high'],
+                ].map(([id, name, my_tier, his_tier]) => make_section(id, name, { filters: { ...default_filter_state(), my_tiers: [my_tier], his_tiers: [his_tier] }, factors: [rating_factor('agreement', 'negative', 3)] })) },
+                common_new: { name: '共同追新', description: '仅展示双方都在看的作品。', sections: [
+                    make_section('both_watching', '双方在看', { sets: { my: 'collected', his: 'collected' }, filters: { ...default_filter_state(), my_types: [3], his_types: [3] }, factors: [rating_factor('freshness', 'positive', 3), rating_factor('my_recency', 'positive', 1), rating_factor('his_recency', 'positive', 1)] }),
+                ] },
+                wanted_recommendation: { name: '想看推荐', description: '优先评价我的想看清单，再补充对方的高分作品。', sections: [
+                    make_section('wanted_rated', '想看评价', { limit: null, sets: { my: 'collected', his: 'rated' }, filters: { ...default_filter_state(), my_types: [1] }, scoreMode: 'raw', factors: [rating_factor('his_rating', 'positive', 3)] }),
+                    make_section('opponent_high', '对方高分', { sets: { my: 'any', his: 'rated' }, filters: { ...default_filter_state(), his_tiers: ['high'] }, factors: [rating_factor('his_rating', 'positive', 3)] }),
+                ] },
+            }
+
+            function get_effective_preset(sort_key) {
+                const base = DEFAULT_PRESET_RULES[sort_key] || DEFAULT_PRESET_RULES.important
+                const override = preset_rule_overrides[sort_key]
+                return override ? { ...JSON.parse(JSON.stringify(base)), ...JSON.parse(JSON.stringify(override)), name: base.name } : base
             }
 
             function get_rule_for_sort(sort_key) {
                 if (sort_key.startsWith('custom:')) {
                     const rule = custom_sort_document.rules[sort_key.slice('custom:'.length)]
-                    return rule && !rule.deletedAt ? rule : PRESET_RULES.common_love
+                    return rule && !rule.deletedAt ? rule : get_effective_preset('important')
                 }
-                return PRESET_RULES[sort_key] || PRESET_RULES.common_love
+                return get_effective_preset(sort_key)
             }
 
+            const expanded_result_sections = new Set()
+            let expanded_result_sort_key = analyze_config.current_sort
+
             function getFilteredList(sort_key) {
-                return evaluate_rule(get_rule_for_sort(sort_key)).items
+                if (sort_key !== expanded_result_sort_key) {
+                    expanded_result_sections.clear()
+                    expanded_result_sort_key = sort_key
+                }
+                return evaluate_rule(get_rule_for_sort(sort_key), expanded_result_sections).items
             }
 
             const public_rank_values = result.comparison_items
@@ -1169,22 +1607,6 @@
             }
 
             // ─── 构建 UI ───
-
-            // 分布图工厂
-            function create_distribution_chart(rate_count_map) {
-                let bars = ''
-                for (let i = 10; i > 0; i--) {
-                    const count = rate_count_map[i] || 0
-                    const cls = i >= 8 ? '__high' : i >= 5 ? '__medium' : '__low'
-                    bars += `<div class="${cls}"></div>`
-                }
-                return function (rate) {
-                    return `<div class="_distribution_chart __v${rate}"><div>${bars}</div><b>${rate}</b></div>`
-                }
-            }
-
-            const my_dist_chart = create_distribution_chart(result.my_rate_count_map)
-            const his_dist_chart = create_distribution_chart(result.his_rate_count_map)
 
             function get_compact_score_level(user, rate) {
                 if (!Number.isFinite(rate) || rate <= 0) return 'neutral'
@@ -1208,59 +1630,7 @@
                 return 'low'
             }
 
-            // 渲染条目卡片（复用 Your Angle 的 _review 格式）
-            function render_review_card(review) {
-                const public_score = Number(review.subject.score || 0)
-                return `
-                <div class="_review">
-                    <aside>
-                        <a href="/subject/${review.subject.id}" target="_blank">
-                            <img src="${review.subject.images?.grid || ''}" loading="lazy"/>
-                        </a>
-                        <h3>${review.subject.date || ''}</h3>
-                        <div class="_collection_total" style="background-color: rgb(255 0 0 / ${(
-                            (review.subject.collection_total || 0) / 500
-                        ).toFixed(2)}%)">${(review.subject.collection_total || 0).toLocaleString()}</div>
-                    </aside>
-                    <section>
-                        <h3>${escapeHtml(review.subject.name_cn || '')}</h3>
-                        <h3>${escapeHtml(review.subject.name || '')}</h3>
-
-                        <div>
-                            ${review.his_review ? his_dist_chart(review.his_review.rate) : ''}
-                            <div class="_rank_chart">
-                                <div>
-                                    <div style="flex:${(10 - public_score).toFixed(1)}"></div>
-                                    <div class="_rank_marker" style="background-color:${public_score >= 8 ? '#f40' : public_score >= 5 ? '#fc0' : '#04f'}"></div>
-                                    <div style="flex:${public_score.toFixed(1)}"></div>
-                                </div>
-                                <b>${public_score || '-'}</b>
-                            </div>
-                            ${review.my_review ? my_dist_chart(review.my_review.rate) : ''}
-                        </div>
-                        ${review.his_review ? `
-                        <article class="_comment">
-                            <img src="${his_avatar}" />
-                            <section>
-                                <h3>${review.his_review.date.toLocaleDateString()}${review.his_review.type != 2 ? ` （${collTypeMap[review.his_review.type] || ''}）` : ''}</h3>
-                                ${analyze_config.show_comments ? `<div>${escapeHtml(review.his_review.comment ?? '')}</div>` : ''}
-                            </section>
-                        </article>
-                        ` : ''}
-                        ${review.my_review ? `
-                        <article class="_comment">
-                            <img src="${my_avatar}" />
-                            <section>
-                                <h3>${review.my_review.date.toLocaleDateString()}${review.my_review.type != 2 ? ` （${collTypeMap[review.my_review.type] || ''}）` : ''}</h3>
-                                ${analyze_config.show_comments ? `<div>${escapeHtml(review.my_review.comment ?? '')}</div>` : ''}
-                            </section>
-                        </article>
-                        ` : ''}
-                    </section>
-                </div>`
-            }
-
-            // 简略图渲染（封面 + 对方吐槽字数 + 悬停提示）
+            // 简略图渲染（封面 + 双方评分/吐槽字数 + 展开详情）
             function render_compact_card(review) {
                 const my_rate = review.my_review ? review.my_review.rate : null
                 const his_rate = review.his_review ? review.his_review.rate : null
@@ -1269,48 +1639,68 @@
                 const my_display_score = analyze_config.score_display === 'hidden' ? my_hidden : my_rate
                 const his_display_score = analyze_config.score_display === 'hidden' ? his_hidden : his_rate
                 const pub = review.subject.score
-                const his_comment = review.his_review?.comment ? escapeHtml(review.his_review.comment) : '无'
+                const public_display_score = analyze_config.score_display === 'hidden' ? review.public_hidden : pub
+                const my_comment = review.my_review?.comment ? escapeHtml(review.my_review.comment) : ''
+                const his_comment = review.his_review?.comment ? escapeHtml(review.his_review.comment) : ''
                 const his_comment_chars = review.his_review?.comment_chars ?? count_text_chars(review.his_review?.comment)
                 const name = escapeHtml(getSubjectDisplayName(review.subject))
+                const subject_type_label = subject_config[Number(review.subject.type)]?.name || ''
                 const total = review.subject.collection_total || 0
                 const my_type = review.my_review?.type
                 const his_type = review.his_review?.type
                 const my_status = my_type && my_type !== 2 ? `（${collTypeMap[String(my_type)]}）` : ''
                 const his_status = his_type && his_type !== 2 ? `（${collTypeMap[String(his_type)]}）` : ''
-                const score_line = my_rate != null
-                    ? `我${my_status}：原始 ${my_rate || '-'} / 隐藏 ${my_hidden ?? '-'}　对方${his_status}：原始 ${his_rate || '-'} / 隐藏 ${his_hidden ?? '-'}`
-                    : `对方${his_status}：原始 ${his_rate || '-'} / 隐藏 ${his_hidden ?? '-'}`
+                const public_hidden = review.public_hidden ?? null
                 return `
-                <div class="_compact_card${important_subject_ids.has(Number(review.subject.id)) ? ' __important' : ''}" data-subject-id="${Number(review.subject.id)}" data-subject-url="/subject/${Number(review.subject.id)}">
+                <div class="_compact_card${important_subject_ids.has(Number(review.subject.id)) ? ' __important' : ''}${review._section_muted ? ' __section_muted' : ''}" data-subject-id="${Number(review.subject.id)}" data-subject-url="/subject/${Number(review.subject.id)}">
                     <img src="${review.subject.images?.grid || ''}" loading="lazy"/>
                     <div class="_compact_scores _compact_user_scores">
                         ${review.my_review ? `
                         <span class="_compact_score __${get_compact_score_level('my', my_rate)} ${get_compact_status_class(review.my_review)}" title="我的评分：原始 ${my_rate || '-'} / 隐藏 ${my_hidden ?? '-'}">
-                            <img src="${my_avatar}" alt="我" />
-                            <b>${my_display_score ?? '-'}</b>
+                            <span class="_compact_score_avatar"><img src="${my_avatar}" alt="我" /></span>
+                            <b>${my_display_score > 0 ? my_display_score : '-'}</b>
                         </span>` : ''}
                         ${review.his_review ? `
                         <span class="_compact_score __${get_compact_score_level('his', his_rate)} ${get_compact_status_class(review.his_review)}" title="对方评分：原始 ${his_rate || '-'} / 隐藏 ${his_hidden ?? '-'}">
-                            <img src="${his_avatar}" alt="对方" />
-                            <b>${his_display_score ?? '-'}</b>
+                            <span class="_compact_score_avatar"><img src="${his_avatar}" alt="对方" /></span>
+                            <b>${his_display_score > 0 ? his_display_score : '-'}</b>
                         </span>` : ''}
+                        ${his_comment_chars > 0 ? `<span class="_compact_comment_indicator __${get_compact_score_level('his', his_rate)}" title="对方有吐槽">+</span>` : ''}
                     </div>
-                    <span class="_compact_score _compact_public_score __public __${get_public_rank_level(review.subject)}" title="大众评分（排名 ${review.subject.rank || '无'}）">
-                        <b>${pub ?? '-'}</b>
+                    <span class="_compact_score _compact_public_score __public __${get_public_rank_level(review.subject)}" title="大众评分：原始 ${pub || '-'} / 隐藏 ${review.public_hidden ?? '-'}（排名 ${review.subject.rank || '无'}）">
+                        <b>${public_display_score > 0 ? public_display_score : '-'}</b>
                     </span>
-                    ${his_comment_chars > 0 ? `<span class="_compact_comment_chars __${get_compact_score_level('his', his_rate)}" title="对方吐槽字数">${his_comment_chars} 字</span>` : ''}
                     <div class="_compact_tip">
-                        ${name} (${total.toLocaleString()}人收藏)<br>
-                        ${score_line}　大众：${pub}<br>
-                        <br>对方: ${his_comment}
+                        <div class="_compact_detail_title">${name}${subject_type_label ? `（${escapeHtml(subject_type_label)}）` : ''}（${total.toLocaleString()} 人收藏）</div>
+                        <table class="_compact_score_table">
+                            <thead><tr><th>评分方</th><th>原始分</th><th>隐藏分</th></tr></thead>
+                            <tbody>
+                                <tr><th><img src="${my_avatar}" alt="" />我${my_status}</th><td>${my_rate || '—'}</td><td>${my_hidden ?? '—'}</td></tr>
+                                <tr><th><img src="${his_avatar}" alt="" />对方${his_status}</th><td>${his_rate || '—'}</td><td>${his_hidden ?? '—'}</td></tr>
+                                <tr><th>大众</th><td>${pub ?? '—'}</td><td>${public_hidden ?? '—'}</td></tr>
+                            </tbody>
+                        </table>
+                        <div class="_compact_public_hidden_note">大众隐藏分为当前双方收藏并集中的大众评分分位</div>
+                        ${his_comment ? `<div class="_compact_detail_comment"><b>对方吐槽：</b>${his_comment}</div>` : ''}
+                        ${my_comment ? `<div class="_compact_my_comment_block${analyze_config.my_comment_collapsed ? ' is-collapsed' : ''}">
+                            <button type="button" class="_compact_my_comment_toggle" aria-expanded="${analyze_config.my_comment_collapsed ? 'false' : 'true'}">${analyze_config.my_comment_collapsed ? '展开我的吐槽' : '折叠我的吐槽'}</button>
+                            <div class="_compact_detail_comment _compact_my_comment"><b>我的吐槽：</b>${my_comment}</div>
+                        </div>` : ''}
                     </div>
                 </div>`
             }
 
             // 渲染列表
-            function render_list(list, count) {
-                const fn = analyze_config.show_comments ? render_review_card : render_compact_card
-                return list.slice(0, count).map(r => fn(r)).join('')
+            function render_list(list) {
+                return list.map(review => {
+                    const header = review._multi_section && review._section_start
+                        ? `<div class="rule-section-header"><strong>${escapeHtml(review._section_name)}</strong>${review._section_description ? `<span>${escapeHtml(review._section_description)}</span>` : ''}</div>`
+                        : ''
+                    const more = review._section_end && review._section_hidden_count > 0
+                        ? `<button type="button" class="rule-section-more" data-section-id="${escapeHtml(review._section_id)}" title="展开本段剩余条目">+${review._section_hidden_count} 部</button>`
+                        : ''
+                    return `${header}${render_compact_card(review)}${more}`
+                }).join('')
             }
 
             function render_hidden_score_panel() {
@@ -1341,7 +1731,7 @@
                 const points = (counts, color) => Array.from({ length: 10 }, (_, index) => {
                     const rate = index + 1
                     const count = counts[rate] || 0
-                    return `<circle cx="${x(rate)}" cy="${y(count)}" r="3" fill="${color}"><title>${rate}分：${count}个收藏</title></circle>`
+                    return `<circle class="hidden-chart-point" data-rate="${rate}" cx="${x(rate)}" cy="${y(count)}" r="5" fill="${color}" />`
                 }).join('')
                 const x_labels = Array.from({ length: 10 }, (_, index) => {
                     const rate = index + 1
@@ -1376,73 +1766,10 @@
                 .鉴定_page { line-height: 1.5; font-size: 16px; padding-top: 15px; }
                 .鉴定_page * { box-sizing: border-box; }
                 .analysis-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
-                .sort-area { flex: 1; min-width: 0; }
+                .sort-area { flex: 0 0 600px; width: 600px; min-width: 0; }
                 .sort-track { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-                #panel { width: 400px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; }
+                #panel { width: 450px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex-shrink: 0; }
                 .mobile-only-control, .mobile-settings-toggle { display: none; }
-                .鉴定_page ._review {
-                    display: grid;
-                    grid-template-columns: 120px 1fr;
-                    padding: 10px 0;
-                }
-                .鉴定_page ._review h3 { font-size: 16px; }
-                .鉴定_page ._review > aside img {
-                    max-width: 90%;
-                    min-height: 100px;
-                    max-height: 200px;
-                    object-fit: contain;
-                }
-                .鉴定_page ._collection_total {
-                    padding: 5px 10px;
-                    width: fit-content;
-                    border-radius: 5px;
-                    color: #fff;
-                    font-weight: bold;
-                    text-shadow: 0px 1px 1px #000, 0px -1px 1px #000, 1px 0px 1px #000, -1px 0px 1px #000;
-                }
-                .鉴定_page ._comment {
-                    display: grid;
-                    grid-template-columns: max-content 1fr;
-                    gap: 10px;
-                    margin-top: 10px;
-                }
-                .鉴定_page ._comment img { width: 40px; height: 40px; }
-                .鉴定_page ._comment div { white-space: pre-wrap; }
-                .鉴定_page ._distribution_chart {
-                    display: flex;
-                    align-items: center;
-                    gap: 5px;
-                }
-                .鉴定_page ._distribution_chart > div {
-                    display: flex;
-                    width: 300px;
-                    height: 1em;
-                }
-                .鉴定_page ._distribution_chart > div > div { flex: 1; background-color: rgba(170,170,170,0.35); }
-                ${[1,2,3,4,5,6,7,8,9,10].map(n =>
-                    `.鉴定_page ._distribution_chart.__v${n} > div > :nth-last-child(${n}).__high { background-color: #f40; }
-                     .鉴定_page ._distribution_chart.__v${n} > div > :nth-last-child(${n}).__medium { background-color: #fc0; }
-                     .鉴定_page ._distribution_chart.__v${n} > div > :nth-last-child(${n}).__low { background-color: #04f; }`
-                ).join('\n                ')}
-                .鉴定_page ._rank_chart {
-                    display: flex;
-                    align-items: center;
-                    gap: 5px;
-                }
-                .鉴定_page ._rank_chart > div {
-                    display: flex;
-                    width: 300px;
-                    height: 1em;
-                }
-                .鉴定_page ._rank_chart > div > div:not(._rank_marker) {
-                    height: 100%;
-                    background-color: rgba(170,170,170,0.35);
-                }
-                .鉴定_page ._rank_marker {
-                    width: 10px;
-                    height: 100%;
-                    flex-shrink: 0;
-                }
                 .鉴定_page ._compact_card {
                     position: relative;
                     display: block;
@@ -1457,7 +1784,18 @@
                     border-radius: 4px;
                     display: block;
                 }
-                .鉴定_page ._compact_card.__important > img { outline: 2px solid #f2b705; outline-offset: -2px; }
+                .鉴定_page ._compact_card.__important > img { outline: 4px solid #f2b705; outline-offset: -4px; }
+                .鉴定_page ._compact_card.__section_muted { opacity: 0.5; }
+                .鉴定_page ._compact_card.__section_muted:hover { opacity: 0.72; }
+                .rule-section-header { grid-column:1/-1;display:flex;align-items:baseline;gap:8px;width:100%;padding-top:8px;border-top:1px dashed #bbb; }
+                .rule-section-header:first-child { padding-top: 0; border-top: 0; }
+                .rule-section-header span { color:#888;font-size:12px; }
+                .rule-section-more {
+                    width: 100px; height: 140px; padding: 6px; border: 2px dashed rgba(127,127,127,0.55);
+                    border-radius: 4px; color: inherit; background: transparent; font-size: 15px; font-weight: 700;
+                    cursor: pointer;
+                }
+                .rule-section-more:hover { border-color: #F09199; color: #F09199; background: rgba(240,145,153,0.08); }
                 .鉴定_page ._compact_card:hover > img { opacity: 0.7; }
                 .鉴定_page ._compact_scores {
                     position: absolute;
@@ -1474,7 +1812,7 @@
                 .鉴定_page ._compact_score {
                     display: flex;
                     align-items: center;
-                    gap: 3px;
+                    gap: 0;
                     background: #222;
                     color: #fff;
                     font-size: 11px;
@@ -1509,22 +1847,19 @@
                     border-radius: 50%;
                     object-fit: cover;
                 }
+                .鉴定_page ._compact_score_avatar { position: relative; display: flex; flex: 0 0 15px; width: 15px; height: 15px; }
+                .鉴定_page ._compact_comment_indicator {
+                    align-self: flex-end; width: 14px; height: 14px; border-radius: 50%;
+                    color: #fff; background: #222; font: 700 12px/14px sans-serif; text-align: center;
+                }
+                .鉴定_page ._compact_comment_indicator.__low { background: #04f; }
+                .鉴定_page ._compact_comment_indicator.__medium { color: #332800; background: #fc0; }
+                .鉴定_page ._compact_comment_indicator.__high { background: #f40; }
+                .鉴定_page ._compact_comment_indicator.__neutral { background: #222; }
                 .鉴定_page ._compact_score b {
                     min-width: 1.2em;
+                    margin-left: -1px;
                     text-align: right;
-                }
-                .鉴定_page ._compact_comment_chars {
-                    position: absolute;
-                    top: 24px;
-                    left: 4px;
-                    color: #fff;
-                    font-size: 11px;
-                    font-weight: 700;
-                    line-height: 15px;
-                    padding: 1px 4px;
-                    border-radius: 8px;
-                    pointer-events: none;
-                    background: #222;
                 }
                 .鉴定_page ._compact_tip {
                     display: none;
@@ -1547,16 +1882,52 @@
                 .鉴定_page ._compact_inline_detail {
                     grid-column: 1 / -1; width: 100%; min-width: 0; max-width: 100%;
                     padding: 10px 12px; overflow-x: auto; overflow-wrap: anywhere;
-                    color: #333; background: rgba(240,145,153,0.12); border-left: 3px solid #F09199;
+                    color: #333; background: rgba(240,145,153,0.12); border-left: 3px solid transparent;
                     border-radius: 5px; line-height: 1.65;
                 }
+                .鉴定_page ._compact_inline_detail.__locked { border-left-color: #F09199; }
+                .鉴定_page ._compact_detail_title { margin-bottom: 7px; font-weight: 700; }
+                .鉴定_page ._compact_score_table {
+                    width: min(100%, 280px); border-collapse: collapse; table-layout: fixed;
+                    font-size: 13px; line-height: 1.35;
+                }
+                .鉴定_page ._compact_score_table th, .鉴定_page ._compact_score_table td {
+                    padding: 5px 7px; border: 1px solid rgba(127,127,127,0.35); text-align: center;
+                }
+                .鉴定_page ._compact_score_table tbody th { text-align: left; font-weight: 500; }
+                .鉴定_page ._compact_score_table img {
+                    width: 18px; height: 18px; margin-right: 5px; border-radius: 50%; object-fit: cover; vertical-align: -5px;
+                }
+                .鉴定_page ._compact_public_hidden_note { margin-top: 4px; color: #888; font-size: 11px; }
+                .鉴定_page ._compact_detail_comment { margin-top: 8px; white-space: pre-wrap; }
+                .鉴定_page ._compact_my_comment_block { margin-top: 8px; }
+                .鉴定_page ._compact_my_comment_block ._compact_detail_comment { margin-top: 5px; }
+                .鉴定_page ._compact_my_comment_block.is-collapsed ._compact_my_comment { display: none; }
+                .鉴定_page ._compact_my_comment_toggle { padding: 2px 7px; border: 1px solid rgba(127,127,127,0.45); border-radius: 4px; color: inherit; background: transparent; cursor: pointer; font-size: 12px; }
                 html[data-theme=dark] .鉴定_page ._compact_inline_detail { color: #ddd; background: rgba(240,145,153,0.16); }
                 .鉴定_page .sort-tab { padding: 8px 18px; cursor: pointer; font-size: 1.1em; font-weight: bold; border: 1px solid #ccc; border-radius: 4px; background: transparent; }
                 .鉴定_page .sort-tab.active { background: #F09199; color: #fff; border-color: #F09199; }
-                #type-filter-menu, #subject-type-menu { background: #fff; border: 1px solid #ccc; }
-                html[data-theme=dark] #type-filter-menu, html[data-theme=dark] #subject-type-menu { background: #2c2c2c; border-color: #555; }
-                html[data-theme=dark] #type-filter-menu label:hover, html[data-theme=dark] #subject-type-menu label:hover { background: #3a3a3a; }
-                #simi-container:hover #simi-overlay { display: block; }
+                #subject-type-menu, #opponent-menu { background: #fff; border: 1px solid #ccc; }
+                html[data-theme=dark] #subject-type-menu, html[data-theme=dark] #opponent-menu { background: #2c2c2c; border-color: #555; }
+                html[data-theme=dark] #subject-type-menu label:hover, html[data-theme=dark] .opponent-option:hover { background: #3a3a3a; }
+                .opponent-option { display: flex; width: 100%; align-items: center; gap: 7px; padding: 6px 9px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+                .opponent-option img, #opponent-select-btn img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+                .opponent-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; }
+                .opponent-row:hover { background: rgba(127,127,127,0.1); }
+                .opponent-cache-action { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+                .opponent-cache-action:hover { background: rgba(127,127,127,0.18); }
+                .friend-loader-backdrop { position: fixed; inset: 0; z-index: 10035; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.48); }
+                .friend-loader-modal { width: min(900px, 96vw); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; padding: 16px; color: #333; background: #fff; border-radius: 10px; }
+                .friend-loader-list { min-height: 180px; overflow-y: auto; display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 7px; margin: 10px 0; }
+                .friend-loader-item { position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0;padding:8px 4px;border:1px solid #ddd;border-radius:6px;text-align:center;cursor:pointer; }
+                .friend-loader-item:has(input:checked) { border-color:#F09199;background:rgba(240,145,153,0.12); }
+                .friend-loader-item input { position:absolute;opacity:0;pointer-events:none; }
+                .friend-loader-item img { width:40px;height:40px;border-radius:50%;object-fit:cover; }
+                .friend-loader-item span { width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px; }
+                .friend-loader-actions { display:flex;justify-content:flex-end;gap:8px; }
+                html[data-theme=dark] .friend-loader-modal { color: #ddd; background: #2c2c2c; }
+                html[data-theme=dark] .friend-loader-item { border-color: #555; }
+                #simi-container.is-open #simi-overlay { display: block; }
                 #simi-overlay { display: none; position: absolute; top: 100%; right: 0; z-index: 20; background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 420px; }
                 #simi-overlay .simi-header { border-bottom: 1px solid #ddd; }
                 #simi-overlay .simi-row { border-bottom: 1px solid #eee; }
@@ -1566,16 +1937,18 @@
                 html[data-theme=dark] #simi-overlay th { color: #ccc; }
                 html[data-theme=dark] #simi-overlay td { color: #ddd; }
                 #hidden-score-container { position: relative; }
-                #hidden-score-container:hover #hidden-score-overlay { display: block; }
+                #hidden-score-container.is-open #hidden-score-overlay { display: block; }
                 #hidden-score-overlay {
-                    display: none; position: absolute; top: 100%; right: 0; z-index: 30;
+                    display: none; position: absolute; top: -100px; right: calc(100% + 8px); z-index: 30;
                     width: 460px; max-height: 75vh; overflow-y: auto; padding: 12px;
                     color: #333; background: #fff; border: 1px solid #ccc; border-radius: 6px;
                     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
                 }
                 #hidden-score-overlay svg { display: block; width: 100%; height: auto; }
+                #hidden-chart-tooltip { display:none;position:absolute;z-index:2;padding:3px 7px;transform:translateY(-100%);color:#fff;background:rgba(0,0,0,0.86);border-radius:4px;font-size:12px;white-space:nowrap;pointer-events:none; }
+                .hidden-chart-point { cursor: crosshair; }
                 #hidden-score-overlay .hidden-chart-title { margin: 4px 0; font-size: 0.85em; font-weight: 700; }
-                #hidden-score-overlay .hidden-score-table { width: 100%; margin-bottom: 12px; border-collapse: collapse; text-align: center; font-size: 0.8em; }
+                #hidden-score-overlay .hidden-score-table, .mobile-sheet-content .hidden-score-table { width: 150px; max-width: 100%; margin: 0 auto 12px; border-collapse: collapse; text-align: center; font-size: 0.8em; }
                 #hidden-score-overlay .hidden-score-table th,
                 #hidden-score-overlay .hidden-score-table td { padding: 3px 8px; border: 1px solid #ddd; }
                 #hidden-score-overlay .hidden-score-table th:first-child { width: 34%; }
@@ -1606,17 +1979,26 @@
                     width: min(900px, 95vw); max-height: 90vh; overflow-y: auto; padding: 18px;
                     color: #333; background: #fff; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.35);
                 }
-                .custom-sort-modal h2 { margin: 0 0 14px; }
+                .custom-modal-header {
+                    position: sticky; top: -18px; z-index: 4; display: flex; align-items: center;
+                    justify-content: space-between; gap: 12px; margin: -18px -18px 12px; padding: 14px 18px 10px;
+                    background: inherit; border-bottom: 1px solid rgba(127,127,127,0.2);
+                }
+                .custom-sort-modal h2 { margin: 0; }
                 .custom-sort-modal h3 { margin: 16px 0 8px; font-size: 15px; }
                 .custom-sort-modal h3 small { margin-left: 6px; color: #888; font-weight: normal; }
                 .custom-sort-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
                 .custom-sort-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85em; }
-                .custom-sort-modal input, .custom-sort-modal select { min-height: 30px; padding: 4px 6px; }
+                .custom-sort-modal input, .custom-sort-modal select, .custom-sort-modal textarea { min-height: 30px; padding: 4px 6px; }
+                .custom-sort-modal textarea { resize: vertical; }
                 .custom-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
                 .custom-filter-grid > label { display: flex; flex-direction: column; gap: 4px; }
                 .custom-chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
                 .custom-chip-row label { display: flex; align-items: center; gap: 3px; }
                 .custom-chip-row input { min-height: auto; }
+                .custom-radio-row { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 5px; }
+                .custom-radio-row label { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+                .custom-radio-row input { min-height: auto; }
                 .custom-advanced-filter { margin-top: 10px; }
                 .custom-advanced-filter summary { cursor: pointer; color: #666; }
                 .custom-range-row { display: grid; grid-template-columns: 130px 1fr auto 1fr; align-items: center; gap: 6px; margin-top: 7px; }
@@ -1639,7 +2021,17 @@
                 .custom-score-detail th, .custom-score-detail td { padding: 3px 6px; border-bottom: 1px solid #ddd; text-align: right; }
                 .custom-score-detail th:first-child, .custom-score-detail td:first-child { text-align: left; }
                 .custom-modal-note { margin: 8px 0 0; color: #888; font-size: 12px; }
-                .custom-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+                .custom-modal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+                .rule-section-tabs { display:flex;align-items:flex-end;gap:2px;margin-top:14px;padding:0 6px;border-bottom:1px solid #ccc;overflow-x:auto;scrollbar-width:thin; }
+                .rule-section-tab { flex:0 0 auto;min-width:42px;margin-bottom:-1px;padding:7px 14px;border:1px solid transparent;border-bottom-color:#ccc;border-radius:7px 7px 0 0;color:inherit;background:rgba(127,127,127,0.08);cursor:pointer; }
+                .rule-section-tab:hover { background:rgba(240,145,153,0.1); }
+                .rule-section-tab.active { position:relative;border-color:#ccc;border-bottom-color:#fff;background:#fff;color:#d95d69;font-weight:700; }
+                .rule-section-editor { margin-top:0;padding:12px;border:1px solid #ccc;border-top:0;border-radius:0 0 8px 8px; }
+                .rule-section-editor > header { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px; }
+                .rule-section-editor > header button { min-width:30px; }
+                .section-inline-options { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0; }
+                .section-inline-options label { display:flex;align-items:center;gap:4px;font-size:12px; }
+                .section-preview + .section-preview { margin-top:10px;padding-top:8px;border-top:1px solid #ddd; }
                 .custom-context-menu {
                     position: fixed; z-index: 10030; min-width: 110px; padding: 4px;
                     background: #fff; border: 1px solid #ccc; border-radius: 5px; box-shadow: 0 3px 10px rgba(0,0,0,0.2);
@@ -1650,24 +2042,50 @@
                 html[data-theme=dark] .custom-preview { background: #222; }
                 html[data-theme=dark] .custom-factor-card { border-color: #555; }
                 html[data-theme=dark] .custom-factor-card.enabled { border-color: #F09199; }
+                html[data-theme=dark] .rule-section-tabs { border-color:#555; }
+                html[data-theme=dark] .rule-section-tab { border-bottom-color:#555;background:rgba(255,255,255,0.05); }
+                html[data-theme=dark] .rule-section-tab.active { border-color:#555;border-bottom-color:#2c2c2c;background:#2c2c2c;color:#F09199; }
+                html[data-theme=dark] .rule-section-editor { border-color:#555; }
+                html[data-theme=dark] .section-preview + .section-preview { border-color:#555; }
                 html[data-theme=dark] .custom-context-menu button:hover { background: #444; }
                 .mobile-sheet-backdrop { display: none; }
                 .dual-range-container { position: relative; width: 200px; height: 24px; }
-                .dual-range-container .slider-track { position: absolute; top: 50%; left: 0; right: 0; height: 4px; transform: translateY(-50%); border-radius: 2px; z-index: 1; }
+                .dual-range-container .slider-track { position:absolute;top:50%;left:0;right:0;height:4px;transform:translateY(-50%);border-radius:2px;z-index:1; }
                 .dual-range-container input[type="range"] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; z-index: 2; margin: 0; }
                 .dual-range-container input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 2px; background: #007bff; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0,0,0,0.3); cursor: pointer; pointer-events: auto; margin-top: -5px; }
                 .dual-range-container input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 2px; background: #007bff; border: 2px solid #fff; box-shadow: 0 0 2px rgba(0,0,0,0.3); cursor: pointer; pointer-events: auto; }
                 .dual-range-container input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: transparent; }
                 .dual-range-container input[type="range"]::-moz-range-track { height: 4px; background: transparent; border: none; }
                 .percent-bar { user-select: none; }
+                .threshold-summary-card { width:min(350px,100%);align-self:flex-end;display:grid;grid-template-columns:1fr .82fr 1fr;border:1px solid rgba(127,127,127,.35);border-radius:6px;overflow:hidden; }
+                .threshold-summary-card > section { min-width:0;padding:4px 5px;text-align:center; }
+                .threshold-summary-card > section + section { border-left:1px solid rgba(127,127,127,.25); }
+                .threshold-user-head { display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:3px;font-size:12px;font-weight:700; }
+                .threshold-user-head span { font-weight:400; }
+                .threshold-user-head img { width:20px;height:20px;border-radius:50%;object-fit:cover; }
+                .threshold-stat-values { display:flex;justify-content:center;gap:9px;font-size:12px;white-space:nowrap; }
+                .threshold-common-row { display:flex;align-items:center;justify-content:center;min-height:20px;font-size:12px;white-space:nowrap; }
+                .threshold-slider-row { width:234px;align-self:flex-end;display:grid;grid-template-columns:26px 200px;gap:8px;align-items:center; }
+                .threshold-slider-avatar { width:26px;height:26px;border-radius:50%;object-fit:cover; }
+                .threshold-controls,.threshold-controls .dual-range-container,.threshold-controls .percent-bar { width:200px; }
+                .percent-score-label { position:absolute;inset:1px 0 -1px;z-index:2;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;text-shadow:0 1px 1px rgba(0,0,0,.7);pointer-events:none; }
+                .percent-score-label.__medium { color:#111;text-shadow:none; }
+                @media (min-width: 761px) {
+                    .鉴定_host {
+                        position: relative; left: 50%; transform: translateX(-50%);
+                        width: min(1120px, calc(100vw - 32px)) !important; max-width: none !important;
+                    }
+                }
                 @media (max-width: 760px) {
                     .鉴定_host {
                         float: none !important; width: 100% !important; min-width: 0 !important;
                         max-width: none !important; margin: 0 !important; padding: 0 !important;
+                        left: auto !important; transform: none !important;
                     }
                     .鉴定_page { width: 100%; min-width: 0; padding: 10px 8px 24px !important; overflow-x: hidden; font-size: 14px; }
                     .analysis-top { flex-direction: column; gap: 8px; }
                     .sort-area, #panel { width: 100%; min-width: 0; }
+                    .sort-area { flex: none; }
                     .sort-track {
                         flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain;
                         scrollbar-width: none; padding: 2px 0 5px; margin-bottom: 4px;
@@ -1684,23 +2102,15 @@
                     #panel:not(.mobile-open) > :not(.mobile-settings-toggle) { display: none !important; }
                     #panel-filter, #panel-actions, #panel-summary { width: 100%; flex-wrap: wrap; justify-content: flex-start; }
                     #panel-threshold { width: 100%; }
-                    .threshold-slider-row { width: 100%; flex-direction: column; gap: 3px !important; }
-                    .threshold-meta { width: 100% !important; align-items: flex-start !important; }
+                    .threshold-slider-row { width:100%;grid-template-columns:26px minmax(0,1fr); }
                     .threshold-controls { width: 100%; }
                     .dual-range-container, .percent-bar { width: 100% !important; }
-                    #type-filter-menu { min-width: 0 !important; width: min(280px, calc(100vw - 32px)); }
                     #subject-type-menu { min-width: 0 !important; width: min(180px, calc(100vw - 32px)); }
+                    #opponent-menu { min-width: 0 !important; width: min(260px, calc(100vw - 32px)); }
                     #sort-list-container.is-compact {
                         grid-template-columns: repeat(3, 100px) !important;
-                        justify-content: space-evenly; gap: 10px 5px !important;
+                        justify-content: space-evenly; gap: 16px 5px !important;
                     }
-                    #sort-list-container.is-detailed { grid-template-columns: minmax(0, 1fr) !important; gap: 14px !important; }
-                    .鉴定_page ._review { grid-template-columns: 82px minmax(0, 1fr); gap: 8px; padding: 8px 0; }
-                    .鉴定_page ._review > aside img { width: 76px; max-width: 100%; min-height: 0; max-height: 120px; }
-                    .鉴定_page ._review h3 { margin: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
-                    .鉴定_page ._distribution_chart > div, .鉴定_page ._rank_chart > div { width: 100%; min-width: 0; }
-                    .鉴定_page ._comment { gap: 6px; margin-top: 6px; }
-                    .鉴定_page ._comment img { width: 30px; height: 30px; }
                     .custom-sort-modal-backdrop { align-items: stretch; padding: 0; }
                     .custom-sort-modal {
                         width: 100%; height: 100vh; height: 100dvh; max-height: none; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
@@ -1710,10 +2120,10 @@
                     .custom-preview-items { overflow-x: auto; }
                     .custom-preview-item { flex: 0 0 74px; }
                     .custom-score-detail { overflow-x: auto; }
-                    .custom-modal-actions {
-                        position: sticky; bottom: calc(-1 * max(12px, env(safe-area-inset-bottom)));
-                        z-index: 3; padding: 10px 0 max(10px, env(safe-area-inset-bottom)); background: inherit;
-                    }
+                    .friend-loader-backdrop { padding: 0; }
+                    .friend-loader-modal { width: 100%; height: 100dvh; max-height: none; border-radius: 0; }
+                    .friend-loader-list { grid-template-columns: repeat(3,minmax(0,1fr)); }
+                    .custom-modal-header { top: calc(-1 * max(12px, env(safe-area-inset-top))); }
                 }
                 @media (max-width: 520px) {
                     .custom-sort-form-grid, .custom-filter-grid, .custom-factor-grid { grid-template-columns: minmax(0, 1fr); }
@@ -1726,7 +2136,7 @@
                 }
                 @media (hover: none), (pointer: coarse) {
                     .mobile-only-control { display: inline-flex; align-items: center; justify-content: center; padding: 6px 10px; border: 1px solid #ccc; border-radius: 5px; background: transparent; }
-                    .鉴定_page ._compact_card:hover ._compact_tip, #simi-container:hover #simi-overlay, #hidden-score-container:hover #hidden-score-overlay { display: none; }
+                    .鉴定_page ._compact_card:hover ._compact_tip, #simi-container #simi-overlay, #hidden-score-container #hidden-score-overlay { display: none; }
                     .mobile-sheet-backdrop:not([hidden]) {
                         position: fixed; inset: 0; z-index: 10040; display: flex; align-items: flex-end;
                         justify-content: center; background: rgba(0,0,0,0.48);
@@ -1761,36 +2171,26 @@
                     <div class="sort-area">
                         <div class="sort-track">
                             <button class="sort-tab${analyze_config.current_sort === 'important' ? ' active' : ''}" data-sort="important">重要番剧</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'common_love' ? ' active' : ''}" data-sort="common_love">共同喜欢</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'common_hate' ? ' active' : ''}" data-sort="common_hate">共同低分</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'diff_high' ? ' active' : ''}" data-sort="diff_high">分歧最大</button>
-                        </div>
-                        <div class="sort-track">
+                            <button class="sort-tab${analyze_config.current_sort === 'discover_important' ? ' active' : ''}" data-sort="discover_important">发现重要番剧</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'high_sync' ? ' active' : ''}" data-sort="high_sync">高同步率</button>
+                            <button class="sort-tab${analyze_config.current_sort === 'low_sync' ? ' active' : ''}" data-sort="low_sync">低同步率</button>
                             <button class="sort-tab${analyze_config.current_sort === 'common_new' ? ' active' : ''}" data-sort="common_new">共同追新</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'his_public_diff' ? ' active' : ''}" data-sort="his_public_diff">对方独特</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'his_love' ? ' active' : ''}" data-sort="his_love">对方高分</button>
-                            <button class="sort-tab${analyze_config.current_sort === 'his_comment' ? ' active' : ''}" data-sort="his_comment">对方吐槽</button>
-                        </div>
-                        <div class="sort-track">
+                            <button class="sort-tab${analyze_config.current_sort === 'wanted_recommendation' ? ' active' : ''}" data-sort="wanted_recommendation">想看推荐</button>
                             <span id="custom-sort-buttons" style="display: contents;">${render_custom_sort_buttons_html()}</span>
-                            <button id="new-custom-sort" class="sort-tab" type="button">＋ 新建分类</button>
+                            <button id="new-custom-sort" class="sort-tab" type="button">＋ 新建规则</button>
                         </div>
-                        <button id="mobile-sort-manage" class="mobile-only-control" type="button">分类操作</button>
+                        <button id="mobile-sort-manage" class="mobile-only-control" type="button">规则操作</button>
                     </div>
                     <div id="panel" class="${mobile_settings_open ? 'mobile-open' : ''}">
                         <button id="mobile-settings-toggle" class="mobile-settings-toggle" type="button" aria-expanded="${mobile_settings_open}">
-                            ${get_subject_selection_label(true)} · ${analyze_config.display_count >= 9999 ? '全部' : `前${analyze_config.display_count}条`} · 设置
+                            ${get_subject_selection_label(true)} · 设置
                         </button>
                         <div id="panel-filter" style="display: flex; gap: 6px; align-items: center;">
-                            <div id="type-filter-dropdown" style="position: relative;">
-                                <button id="type-filter-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">临时状态 ▾</button>
-                                <div id="type-filter-menu" style="display: none; position: absolute; top: 100%; left: 0; border-radius: 4px; padding: 8px 10px; z-index: 10; min-width: 250px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
-                                    ${['my', 'his'].map(user => `<div style="margin-bottom:6px"><b>${user === 'my' ? '我' : '对方'}</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-                                        ${[1,2,3,4,5].map(t => `<label style="display:flex;align-items:center;gap:2px;cursor:pointer;font-size:0.85em">
-                                            <input type="checkbox" class="type-filter-cb" data-user="${user}" data-type="${t}" ${analyze_config[`${user}_filter_types`].includes(t) ? 'checked' : ''}>${collTypeMap[String(t)]}
-                                        </label>`).join('')}</div></div>`).join('')}
-                                    <small style="color:#888">全选或全不选表示不限制该侧</small>
-                                </div>
+                            <div id="opponent-dropdown" style="position:relative">
+                                <button id="opponent-select-btn" type="button" style="display:flex;align-items:center;gap:5px;padding:3px 8px;cursor:pointer;font-size:0.85em;border:1px solid #ccc;border-radius:4px;background:transparent">
+                                    <img src="${his_avatar}" alt=""><span>${escapeHtml(cur_user1.nickname || cur_user1.username)}</span> ▾
+                                </button>
+                                <div id="opponent-menu" style="display:none;position:absolute;top:100%;left:0;z-index:15;min-width:250px;max-height:360px;overflow-y:auto;padding:4px;border-radius:5px;box-shadow:0 2px 8px rgba(0,0,0,0.18)"></div>
                             </div>
                             <div id="subject-type-dropdown" style="position:relative">
                                 <button id="subject-type-btn" type="button" style="padding:4px 8px;cursor:pointer;font-size:0.9em;border:1px solid #ccc;border-radius:4px;background:transparent">${get_subject_selection_label(true)} ▾</button>
@@ -1802,64 +2202,62 @@
                                     <button id="subject-type-apply" type="button" style="display:block;width:calc(100% - 16px);margin:4px 8px;padding:5px">应用</button>
                                 </div>
                             </div>
-                            <select id="display-count-select" style="padding: 4px 8px; font-size: 1em;">
-                                <option value="5" ${analyze_config.display_count === 5 ? 'selected' : ''}>前5条</option>
-                                <option value="10" ${analyze_config.display_count === 10 ? 'selected' : ''}>前10条</option>
-                                <option value="20" ${analyze_config.display_count === 20 ? 'selected' : ''}>前20条</option>
-                                <option value="50" ${analyze_config.display_count === 50 ? 'selected' : ''}>前50条</option>
-                                <option value="9999" ${analyze_config.display_count >= 9999 ? 'selected' : ''}>全部</option>
-                            </select>
+                            <button id="feedback-link" type="button" style="padding:4px 8px;cursor:pointer;font-size:.9em;border:1px solid #ccc;border-radius:4px;background:transparent">✉ 反馈</button>
                         </div>
                         <div id="panel-actions" style="display: flex; gap: 10px; align-items: center;">
-                            <button id="force-update-btn" style="padding: 6px 14px; cursor: pointer; font-size: 0.9em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">更新缓存</button>
+                            <button id="score-display-toggle" type="button" style="padding:4px 10px;cursor:pointer;font-size:.85em;border:1px solid #ccc;border-radius:4px;background:transparent">${analyze_config.score_display === 'hidden' ? '显示：隐藏分' : '显示：原始分'}</button>
+                            <button id="score-distribution-toggle" type="button" style="padding:4px 10px;cursor:pointer;font-size:.85em;border:1px solid #ccc;border-radius:4px;background:transparent">评分分布</button>
+                            <button id="friend-rating-toggle" type="button" style="padding:4px 10px;cursor:pointer;font-size:.85em;border:1px solid #ccc;border-radius:4px;background:transparent">好友评级</button>
                             <div style="position: relative;">
                                 <button id="custom-cloud-status" data-status="${cloud_sync_status}" style="padding: 5px 8px; cursor: pointer; font-size: 0.8em; border: 1px solid #ccc; border-radius: 4px; background: transparent;"></button>
                                 <div id="cloud-sync-menu">
                                     <button type="button" data-cloud-action="sync">立即同步</button>
                                     <button type="button" data-cloud-action="export">导出规则</button>
                                     <button type="button" data-cloud-action="import">导入规则</button>
+                                    <button type="button" data-cloud-action="export-important">导出重要番剧</button>
+                                    <button type="button" data-cloud-action="import-important">导入重要番剧</button>
+                                    <button type="button" data-cloud-action="reset-rules">重置规则数据</button>
                                 </div>
                             </div>
-                            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 0.9em;">
-                                <input type="checkbox" id="show-comments-toggle" ${analyze_config.show_comments ? 'checked' : ''} />
-                                详细
-                            </label>
-                            <a href="${FEEDBACK_URL}" id="feedback-link" style="font-size: 0.9em; color: #888; cursor: pointer;">点我反馈</a>
                         </div>
-                        <div id="panel-threshold" style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
+                        <div id="panel-threshold" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;width:100%">
+                            <div class="threshold-summary-card">
+                                <section>
+                                    <div class="threshold-user-head"><img src="${my_avatar}" alt="我"><span>吐槽 ${result.my_comment_chars}字</span></div>
+                                    <div class="threshold-stat-values"><span>收藏 ${result.my_collection_count}</span><span>看过 ${result.my_watched_count}</span></div>
+                                </section>
+                                <section>
+                                    <div class="threshold-common-row">共同收藏 ${result.common_collection_count}</div>
+                                    <div class="threshold-common-row">共同评分 ${result.common_rating_count}</div>
+                                </section>
+                                <section>
+                                    <div class="threshold-user-head"><img src="${his_avatar}" alt="对方"><span>吐槽 ${result.his_comment_chars}字</span></div>
+                                    <div class="threshold-stat-values"><span>收藏 ${result.his_collection_count}</span><span>看过 ${result.his_watched_count}</span></div>
+                                </section>
+                            </div>
                             ${['my', 'his'].map(user => {
                                 const low = analyze_config[user + '_threshold_low']
                                 const high = analyze_config[user + '_threshold_high']
-                                const label = user === 'my' ? '我' : '对方'
-                                const collCount = result[user + '_coll_count']
-                                const commentChars = result[user + '_comment_chars']
-                                const stats = `看过${collCount} 吐槽${commentChars}字`
+                                const avatar = user === 'my' ? my_avatar : his_avatar
                                 return `
-                                <div class="threshold-slider-row" style="display: flex; gap: 8px; align-items: flex-start;">
-                                    <div class="threshold-meta" style="width: 170px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding-top: 2px;">
-                                        <span class="threshold-label" data-user="${user}" style="font-size: 0.85em; white-space: nowrap;"></span>
-                                        <span style="font-size: 0.75em;">${label} ${stats}</span>
-                                    </div>
-                                    <div class="threshold-controls" style="display: flex; flex-direction: column; gap: 4px;">
+                                <div class="threshold-slider-row">
+                                    <img class="threshold-slider-avatar" src="${avatar}" alt="${user === 'my' ? '我' : '对方'}">
+                                    <div class="threshold-controls" style="display:flex;flex-direction:column;gap:4px">
                                         <div class="dual-range-container" data-user="${user}">
                                             <div class="slider-track"></div>
                                             <input type="range" class="range-handle range-low" data-user="${user}" min="0" max="10" step="1" value="${low}" />
                                             <input type="range" class="range-handle range-high" data-user="${user}" min="0" max="10" step="1" value="${high}" />
                                         </div>
-                                        <div class="percent-bar" data-user="${user}" style="display: flex; width: 200px; height: 16px; overflow: visible; position: relative;"></div>
+                                        <div class="percent-bar" data-user="${user}" style="display:flex;height:16px;overflow:visible;position:relative"></div>
                                     </div>
                                 </div>`
                             }).join('')}
                         </div>
                         <div id="panel-summary" style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 0.8em; white-space: nowrap;">共同收藏 ${result.common_collection_count} / 共同评分 ${result.common_rating_count}</span>
                             <div id="hidden-score-container">
-                                <button id="score-display-toggle" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">${analyze_config.score_display === 'hidden' ? '显示：隐藏分' : '显示：原始分'}</button>
-                                <button id="mobile-score-distribution" class="mobile-only-control" type="button">评分分布</button>
-                                <div id="hidden-score-overlay">${render_hidden_score_panel()}</div>
+                                <div id="hidden-score-overlay"><div id="hidden-chart-tooltip"></div>${render_hidden_score_panel()}</div>
                             </div>
                             <div id="simi-container" style="position: relative;">
-                                <button id="simi-toggle-btn" style="padding: 4px 10px; cursor: pointer; font-size: 0.85em; border: 1px solid #ccc; border-radius: 4px; background: transparent;">好友评级</button>
                                 <div id="simi-overlay">
                                 <div style="text-align: center; font-size: 0.8em; color: #888; margin-bottom: 8px;">（实验性质）</div>
                                 <table style="width: 100%; font-size: 0.85em; border-collapse: collapse;">
@@ -1908,9 +2306,9 @@
                         </div>
                     </div>
                 </div>
-                <div id="sort-description" style="color: #888; font-size: 0.9em; margin-bottom: 12px; line-height: 1.6;">共 ${getFilteredList(analyze_config.current_sort).length} 条</div>
-                <div id="sort-list-container" class="${analyze_config.show_comments ? 'is-detailed' : 'is-compact'}" style="display: grid; grid-template-columns: ${analyze_config.show_comments ? 'repeat(auto-fill, minmax(450px, 1fr))' : 'repeat(auto-fill, 120px)'}; gap: ${analyze_config.show_comments ? '50px 10px' : '10px 10px'};">
-                    ${render_list(getFilteredList(analyze_config.current_sort), analyze_config.display_count)}
+                <div id="sort-description" style="color:inherit;font-size:0.9em;margin-bottom:12px;line-height:1.6">共 ${getFilteredList(analyze_config.current_sort).length} 条</div>
+                <div id="sort-list-container" class="is-compact" style="display:grid;grid-template-columns:repeat(auto-fill,120px);gap:25px 10px">
+                    ${render_list(getFilteredList(analyze_config.current_sort))}
                 </div>
                 <div id="mobile-sheet-backdrop" class="mobile-sheet-backdrop" hidden>
                     <section id="mobile-sheet" class="mobile-sheet" role="dialog" aria-modal="true" aria-labelledby="mobile-sheet-title">
@@ -1924,33 +2322,124 @@
 
             renderBmoji()
 
+            async function render_opponent_menu() {
+                const menu = document.getElementById('opponent-menu')
+                if (!menu) return
+                menu.innerHTML = '<div style="padding:8px;color:#888">读取本地缓存...</div>'
+                try {
+                    const cached_collection_users = await api_cache.getCachedCollectionUsernames()
+                    const users = (await api_cache.getAllUsers())
+                        .filter(user => user.username !== self_username && cached_collection_users.has(user.username))
+                        .sort((a, b) => {
+                            const recent_diff = Number(recent_opponents[b.username] || 0) - Number(recent_opponents[a.username] || 0)
+                            if (recent_diff !== 0) return recent_diff
+                            return String(a.nickname || a.username).localeCompare(String(b.nickname || b.username), 'zh-CN')
+                        })
+                    menu.innerHTML = `<form id="opponent-search-form" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;padding:5px">
+                            <input id="opponent-search-input" type="text" placeholder="@用户名" autocomplete="off" style="min-width:0;padding:5px 7px">
+                            <button type="submit">搜索并添加</button>
+                            <small id="opponent-search-status" style="grid-column:1/-1;color:#888"></small>
+                        </form>
+                        <button type="button" class="opponent-option" data-opponent-action="friends"><b>＋ 从好友中载入用户</b></button>
+                        <div class="opponent-row">
+                            <div class="opponent-option">
+                                <img src="${escapeHtml(cur_user2.avatar?.medium || '')}" alt=""><span>我 · ${escapeHtml(cur_user2.nickname || cur_user2.username)}<small style="display:block;color:#888">@${escapeHtml(cur_user2.username)} · ${escapeHtml(format_cache_time(cur_user2.username))}</small></span>
+                            </div>
+                            <button type="button" class="opponent-cache-action" data-cache-action="refresh" data-cache-username="${escapeHtml(cur_user2.username)}" title="更新自己的资料和收藏缓存">↻</button>
+                        </div>
+                        ${users.map(user => `<div class="opponent-row">
+                            <button type="button" class="opponent-option" data-opponent-username="${escapeHtml(user.username)}">
+                                <img src="${escapeHtml(user.avatar?.medium || '')}" alt=""><span>${escapeHtml(user.nickname || user.username)}<small style="display:block;color:#888">@${escapeHtml(user.username)} · ${escapeHtml(format_cache_time(user.username))}</small></span>
+                            </button>
+                            <button type="button" class="opponent-cache-action" data-cache-action="refresh" data-cache-username="${escapeHtml(user.username)}" title="刷新用户资料和收藏缓存">↻</button>
+                            <button type="button" class="opponent-cache-action" data-cache-action="delete" data-cache-username="${escapeHtml(user.username)}" title="删除缓存">×</button>
+                        </div>`).join('') || '<div style="padding:8px;color:#888">暂无其他缓存用户</div>'}`
+                } catch (error) {
+                    menu.innerHTML = `<div style="padding:8px;color:#d33">读取缓存失败：${escapeHtml(error.message || error)}</div>`
+                }
+            }
+
+            async function open_friend_loader() {
+                const modal = create_element(`<div class="friend-loader-backdrop">
+                    <section class="friend-loader-modal" role="dialog" aria-modal="true">
+                        <h2 style="margin:0">从好友中载入用户</h2>
+                        <p style="margin:5px 0;color:#888">载入当前选择的条目类型：${escapeHtml(get_subject_selection_label())}；最多选择 20 名好友。</p>
+                        <div class="friend-loader-list"><div style="padding:20px;color:#888">读取好友列表...</div></div>
+                        <div class="friend-loader-progress" style="min-height:1.5em;color:#888"></div>
+                        <div class="friend-loader-actions">
+                            <button type="button" data-friend-action="close">关闭</button>
+                            <button type="button" data-friend-action="load">载入所选好友</button>
+                        </div>
+                    </section>
+                </div>`)
+                document.body.append(modal)
+                const list = modal.querySelector('.friend-loader-list')
+                const progress = modal.querySelector('.friend-loader-progress')
+                let friends = []
+                try {
+                    friends = await fetch_friend_index(self_username)
+                    list.innerHTML = friends.map((friend, index) => `<label class="friend-loader-item">
+                        <input type="checkbox" data-friend-index="${index}">
+                        <img src="${escapeHtml(friend.avatar || '')}" alt="">
+                        <span title="${escapeHtml(friend.nickname)}">${escapeHtml(friend.nickname)}</span>
+                    </label>`).join('') || '<div style="padding:20px;color:#888">没有读取到好友</div>'
+                } catch (error) {
+                    list.innerHTML = `<div style="padding:20px;color:#d33">好友列表读取失败：${escapeHtml(error.message || error)}</div>`
+                }
+                modal.addEventListener('click', async event => {
+                    if (event.target === modal) modal.remove()
+                    const action = event.target.dataset.friendAction
+                    if (!action) return
+                    if (action === 'close') modal.remove()
+                    if (action === 'load') {
+                        const selected = [...list.querySelectorAll('input[data-friend-index]:checked')].map(input => friends[Number(input.dataset.friendIndex)]).filter(Boolean)
+                        if (!selected.length) return alert('请至少选择一位好友')
+                        if (selected.length > 20) return alert('一次最多载入 20 名好友')
+                        modal.querySelectorAll('button,input').forEach(control => { control.disabled = true })
+                        let cursor = 0
+                        let completed = 0
+                        const failures = []
+                        const worker = async () => {
+                            while (cursor < selected.length) {
+                                const friend = selected[cursor++]
+                                progress.textContent = `正在载入 ${friend.nickname}（${completed}/${selected.length}）`
+                                try {
+                                    await load_manager_async.get_user(friend.username)
+                                    await load_manager_async.get_coll(friend.username)
+                                    mark_opponent_viewed(friend.username)
+                                } catch (error) {
+                                    failures.push(`${friend.username}: ${error.message || error}`)
+                                }
+                                completed++
+                            }
+                        }
+                        await Promise.all(Array.from({ length: Math.min(3, selected.length) }, worker))
+                        await prune_cached_opponents(self_username)
+                        progress.textContent = `完成：成功 ${selected.length - failures.length}，失败 ${failures.length}${failures.length ? `（${failures.join('；')}）` : ''}`
+                        modal.querySelectorAll('button,input').forEach(control => { control.disabled = false })
+                        await render_opponent_menu()
+                    }
+                })
+                list.addEventListener('change', event => {
+                    if (!event.target.matches('input[data-friend-index]') || !event.target.checked) return
+                    const checked = list.querySelectorAll('input[data-friend-index]:checked')
+                    if (checked.length > 20) {
+                        event.target.checked = false
+                        progress.textContent = '最多只能选择 20 名好友'
+                    } else {
+                        progress.textContent = `已选择 ${checked.length} / 20`
+                    }
+                })
+            }
+
             // ─── 事件绑定 ───
-
-            const sort_desc = {
-                important: '仅展示标记的重要番剧；按共同喜欢的 2:2:1 权重排序，无评分与缺失一致度按 0 计。',
-                common_love: '双方均为中/好评；综合双方评价与一致度。',
-                common_hate: '双方均为差评；综合双方低评价与一致度。',
-                diff_high: '双方共同评分；优先展示隐藏分分歧最大的条目。',
-                common_new: '双方共同收藏；综合作品新鲜度和双方收藏时间。',
-                his_public_diff: '对方已评分；综合逆大众程度与对方评价。',
-                his_comment: '对方有吐槽；仅按吐槽字数从多到少排序。',
-                his_love: '对方中/好评；按对方隐藏分综合评分。',
-            }
-
-            function describe_custom_rule(rule) {
-                if (!rule) return '自定义规则不存在'
-                const factor_names = (rule.factors || []).map(factor => FACTOR_DEFS[factor.id]?.label).filter(Boolean)
-                const sets = get_rule_sets(rule)
-                const range = `我：${SET_MODE_DEFS[sets.my]} / 对方：${SET_MODE_DEFS[sets.his]}`
-                return `${escapeHtml(range)} · ${factor_names.length ? escapeHtml(factor_names.join('、')) : '纯筛选，按对方收藏时间排序'}`
-            }
 
             function updateDescription() {
                 const list = getFilteredList(analyze_config.current_sort)
-                const description = analyze_config.current_sort.startsWith('custom:')
-                    ? describe_custom_rule(custom_sort_document.rules[analyze_config.current_sort.slice(7)])
-                    : sort_desc[analyze_config.current_sort] || sort_desc.common_love
-                document.getElementById('sort-description').innerHTML = `共 ${list.length} 条 · ${description}`
+                const rule = get_rule_for_sort(analyze_config.current_sort)
+                const rule_note = rule?.description?.trim()
+                const description = rule_note ? ` · ${preset_rule_overrides[analyze_config.current_sort] ? '已修改 · ' : ''}${escapeHtml(rule_note)}` : ''
+                document.getElementById('sort-description').innerHTML = `共 ${list.length} 条${description}`
             }
 
             const touch_media = window.matchMedia('(hover: none), (pointer: coarse)')
@@ -1964,8 +2453,7 @@
             function update_mobile_settings_summary() {
                 const button = document.getElementById('mobile-settings-toggle')
                 if (!button) return
-                const count = analyze_config.display_count >= 9999 ? '全部' : `前${analyze_config.display_count}条`
-                button.textContent = `${get_subject_selection_label(true)} · ${count} · 设置`
+                button.textContent = `${get_subject_selection_label(true)} · 设置`
             }
 
             function close_mobile_sheet() {
@@ -1996,6 +2484,56 @@
             function bind_compact_card_interactions() {
                 const container = document.getElementById('sort-list-container')
                 if (!container) return
+                const apply_my_comment_state = () => {
+                    container.querySelectorAll('._compact_my_comment_block').forEach(block => {
+                        block.classList.toggle('is-collapsed', analyze_config.my_comment_collapsed)
+                        const button = block.querySelector('._compact_my_comment_toggle')
+                        if (!button) return
+                        button.textContent = analyze_config.my_comment_collapsed ? '展开我的吐槽' : '折叠我的吐槽'
+                        button.setAttribute('aria-expanded', analyze_config.my_comment_collapsed ? 'false' : 'true')
+                    })
+                }
+                if (container.dataset.detailControlsBound !== '1') {
+                    container.dataset.detailControlsBound = '1'
+                    container.addEventListener('click', event => {
+                        const toggle = event.target.closest('._compact_my_comment_toggle')
+                        if (!toggle) return
+                        event.preventDefault()
+                        event.stopPropagation()
+                        analyze_config.my_comment_collapsed = !analyze_config.my_comment_collapsed
+                        save_settings()
+                        apply_my_comment_state()
+                    })
+                }
+                container.querySelectorAll('.rule-section-more').forEach(button => button.addEventListener('click', event => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    expanded_result_sections.add(button.dataset.sectionId)
+                    refreshList()
+                }))
+                const close_detail = detail => {
+                    if (!detail) return
+                    detail.sourceCard?.setAttribute('aria-expanded', 'false')
+                    detail.remove()
+                }
+                const show_detail = (card, tip) => {
+                    const current = container.querySelector('._compact_inline_detail')
+                    if (current?.sourceCard === card) {
+                        return current
+                    }
+                    close_detail(current)
+                    const detail = document.createElement('div')
+                    detail.className = '_compact_inline_detail'
+                    detail.innerHTML = tip.innerHTML
+                    detail.sourceCard = card
+                    detail.classList.add('__locked')
+                    card.setAttribute('aria-expanded', 'true')
+                    const row_top = card.offsetTop
+                    const row_cards = [...container.querySelectorAll('._compact_card, .rule-section-more')].filter(item => item.offsetTop === row_top)
+                    const row_last_card = row_cards[row_cards.length - 1] || card
+                    row_last_card.insertAdjacentElement('afterend', detail)
+                    return detail
+                }
                 container.querySelectorAll('._compact_card').forEach(card => {
                     const tip = card.querySelector('._compact_tip')
                     if (!tip || card.dataset.compactInteractionBound === '1') return
@@ -2007,21 +2545,10 @@
                         event.stopPropagation()
                         const current = container.querySelector('._compact_inline_detail')
                         if (current?.sourceCard === card) {
-                            current.remove()
-                            card.setAttribute('aria-expanded', 'false')
+                            close_detail(current)
                             return
                         }
-                        if (current?.sourceCard) current.sourceCard.setAttribute('aria-expanded', 'false')
-                        current?.remove()
-                        const detail = document.createElement('div')
-                        detail.className = '_compact_inline_detail'
-                        detail.innerHTML = tip.innerHTML
-                        detail.sourceCard = card
-                        card.setAttribute('aria-expanded', 'true')
-                        const row_top = card.offsetTop
-                        const row_cards = [...container.querySelectorAll('._compact_card')].filter(item => item.offsetTop === row_top)
-                        const row_last_card = row_cards[row_cards.length - 1] || card
-                        row_last_card.insertAdjacentElement('afterend', detail)
+                        show_detail(card, tip)
                     }
                     card.addEventListener('click', toggle_detail)
                     card.addEventListener('keydown', event => {
@@ -2046,9 +2573,7 @@
                             if (!action) return
                             menu.remove()
                             if (action === 'important') {
-                                if (important_subject_ids.has(subject_id)) important_subject_ids.delete(subject_id)
-                                else important_subject_ids.add(subject_id)
-                                persist_important_subjects()
+                                set_important_subject_marked(subject_id, !important_subject_ids.has(subject_id))
                                 refreshList()
                             }
                             if (action === 'open') {
@@ -2062,25 +2587,18 @@
             }
 
             function refreshList() {
-                const count = parseInt(document.getElementById('display-count-select').value)
                 const list = getFilteredList(analyze_config.current_sort)
                 const container = document.getElementById('sort-list-container')
-                container.innerHTML = render_list(list, count)
-                container.style.gridTemplateColumns = analyze_config.show_comments
-                    ? 'repeat(auto-fill, minmax(450px, 1fr))'
-                    : 'repeat(auto-fill, 120px)'
-                container.style.gap = analyze_config.show_comments ? '50px 10px' : '10px 10px'
-                container.classList.toggle('is-detailed', analyze_config.show_comments)
-                container.classList.toggle('is-compact', !analyze_config.show_comments)
+                container.innerHTML = render_list(list)
                 bind_compact_card_interactions()
                 updateDescription()
             }
 
-            function open_custom_sort_editor(source_rule = null, copy_mode = false) {
+            function open_custom_sort_editor_legacy(source_rule = null, copy_mode = false, edit_preset_key = null) {
                 let initial = source_rule
                     ? JSON.parse(JSON.stringify(source_rule))
                     : {
-                        name: '我的分类', sets: { my: 'rated', his: 'rated' }, filters: {},
+                        name: '我的规则', description: '', sets: { my: 'rated', his: 'rated' }, filters: default_filter_state(),
                         factors: [{ id: 'agreement', direction: 'positive', weight: 2 }],
                     }
                 if (copy_mode) {
@@ -2091,8 +2609,14 @@
                     const labels = { unrated: '未评分', low: '差', medium: '中', high: '好' }
                     return `<label><input type="checkbox" class="tier-filter" data-user="${user}" value="${tier}" ${selected.includes(tier) ? 'checked' : ''}>${labels[tier]}</label>`
                 }).join('')
+                const status_options = user => [1, 2, 3, 4, 5].map(type => `
+                    <label><input type="checkbox" class="status-filter" data-user="${user}" value="${type}">${collTypeMap[String(type)]}</label>
+                `).join('')
+                const comment_options = user => [['any', '不限'], ['has', '有吐槽'], ['empty', '无吐槽']].map(([value, label]) => `
+                    <label><input type="radio" name="${user}-comment-filter" value="${value}">${label}</label>
+                `).join('')
                 const set_mode_options = user => Object.entries(SET_MODE_DEFS)
-                    .filter(([value]) => value !== 'important' || user === 'my')
+                    .filter(([value]) => !['important', 'not_important'].includes(value) || user === 'my')
                     .map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('')
                 const factor_cards = Object.entries(FACTOR_DEFS).map(([id, def]) => `
                     <div class="custom-factor-card" data-factor-id="${id}">
@@ -2112,13 +2636,19 @@
                 const backdrop = create_element(`
                     <div class="custom-sort-modal-backdrop">
                         <section class="custom-sort-modal" role="dialog" aria-modal="true">
-                            <h2>${source_rule && !copy_mode ? '编辑分类' : '新建分类'}</h2>
+                            <header class="custom-modal-header">
+                                <h2>${edit_preset_key ? `编辑默认规则：${DEFAULT_PRESET_RULES[edit_preset_key].name}` : source_rule && !copy_mode ? '编辑规则' : '新建规则'}</h2>
+                                <div class="custom-modal-actions">
+                                    <button type="button" data-action="cancel">取消</button>
+                                    <button type="button" data-action="save">保存并应用</button>
+                                </div>
+                            </header>
                             <div class="custom-sort-form-grid">
                                 <label>名称<input id="custom-rule-name" maxlength="30" /></label>
                                 <label>从内置预设开始
                                     <select id="custom-rule-template">
                                         <option value="">空白 / 保持当前</option>
-                                        ${Object.entries(PRESET_RULES).map(([id, preset]) => `<option value="${id}">${escapeHtml(preset.name)}</option>`).join('')}
+                                        ${Object.entries(DEFAULT_PRESET_RULES).map(([id, preset]) => `<option value="${id}">${escapeHtml(preset.name)}</option>`).join('')}
                                     </select>
                                 </label>
                                 <label>我的条目范围
@@ -2131,38 +2661,41 @@
                                         ${set_mode_options('his')}
                                     </select>
                                 </label>
+                                <label style="grid-column:1/-1">说明备注<textarea id="custom-rule-description" maxlength="300" rows="2" placeholder="说明这条规则适合找什么条目"></textarea></label>
                             </div>
                             <section class="custom-filter-section">
                                 <h3>硬筛选 <small>组间同时满足，组内可多选</small></h3>
                                 <div class="custom-filter-grid">
                                     <div><b>我的评分档位</b><div class="custom-chip-row" data-tier-host="my">${tier_options('my')}</div></div>
                                     <div><b>对方评分档位</b><div class="custom-chip-row" data-tier-host="his">${tier_options('his')}</div></div>
-                                    <label>我的吐槽<select id="my-comment-filter"><option value="any">不限</option><option value="has">有吐槽</option><option value="empty">无吐槽</option></select></label>
-                                    <label>对方吐槽<select id="his-comment-filter"><option value="any">不限</option><option value="has">有吐槽</option><option value="empty">无吐槽</option></select></label>
+                                    <div><b>我的收藏状态</b><div class="custom-chip-row" data-status-host="my">${status_options('my')}</div></div>
+                                    <div><b>对方收藏状态</b><div class="custom-chip-row" data-status-host="his">${status_options('his')}</div></div>
+                                    <div><b>我的吐槽</b><div class="custom-radio-row">${comment_options('my')}</div></div>
+                                    <div><b>对方吐槽</b><div class="custom-radio-row">${comment_options('his')}</div></div>
                                 </div>
                                 <details class="custom-advanced-filter"><summary>高级数值范围</summary>${range_rows}</details>
                             </section>
                             <section class="custom-factor-section">
-                                <h3>综合评分 <small>启用因素后选择偏好方向和权重</small></h3>
+                                <h3>综合评分 <small>启用因素后选择偏好方向和权重</small>
+                                    <button id="custom-score-mode-toggle" type="button" data-score-mode="hidden" style="float:right">评分依据：隐藏分</button>
+                                </h3>
                                 <div class="custom-factor-grid">${factor_cards}</div>
                             </section>
                             <div id="custom-rule-preview" class="custom-preview"></div>
                             <div id="custom-score-detail" class="custom-score-detail"></div>
-                            <p class="custom-modal-note">“未收藏”仅指双方收藏并集中的补集；两侧都选“未收藏”时结果为空。缺少任一启用因素数据的条目会自动排除；未启用因素时按对方收藏时间排序。</p>
-                            <div class="custom-modal-actions">
-                                <button type="button" data-action="cancel">取消</button>
-                                <button type="button" data-action="save">保存并应用</button>
-                            </div>
                         </section>
                     </div>`)
                 document.body.append(backdrop)
 
                 const name_input = backdrop.querySelector('#custom-rule-name')
+                const description_input = backdrop.querySelector('#custom-rule-description')
+                if (edit_preset_key) name_input.disabled = true
                 const my_set_select = backdrop.querySelector('#custom-rule-my-set')
                 const his_set_select = backdrop.querySelector('#custom-rule-his-set')
 
                 function collect_draft() {
                     const selected_tiers = user => [...backdrop.querySelectorAll(`.tier-filter[data-user="${user}"]:checked`)].map(input => input.value)
+                    const selected_types = user => [...backdrop.querySelectorAll(`.status-filter[data-user="${user}"]:checked`)].map(input => Number(input.value))
                     const ranges = {}
                     for (const id of Object.keys(RANGE_FILTER_DEFS)) {
                         const min = backdrop.querySelector(`.range-min[data-range="${id}"]`).value
@@ -2177,12 +2710,16 @@
                     return {
                         ...(initial.id ? { id: initial.id } : {}),
                         name: name_input.value.trim(),
+                        description: description_input.value.trim(),
+                        scoreMode: backdrop.querySelector('#custom-score-mode-toggle').dataset.scoreMode,
                         sets: { my: my_set_select.value, his: his_set_select.value },
                         filters: {
                             my_tiers: selected_tiers('my'),
                             his_tiers: selected_tiers('his'),
-                            my_comment: backdrop.querySelector('#my-comment-filter').value,
-                            his_comment: backdrop.querySelector('#his-comment-filter').value,
+                            my_types: selected_types('my'),
+                            his_types: selected_types('his'),
+                            my_comment: backdrop.querySelector('input[name="my-comment-filter"]:checked')?.value || 'any',
+                            his_comment: backdrop.querySelector('input[name="his-comment-filter"]:checked')?.value || 'any',
                             ranges,
                         },
                         factors,
@@ -2194,7 +2731,7 @@
                 function show_score_detail(item) {
                     const host = backdrop.querySelector('#custom-score-detail')
                     if (!item?._factor_scores?.length) {
-                        host.innerHTML = '<span>该分类未启用评分因素。</span>'
+                        host.innerHTML = '<span>该规则未启用评分因素。</span>'
                         return
                     }
                     host.innerHTML = `<strong>${escapeHtml(getSubjectDisplayName(item.subject))} · 综合 ${item._custom_score.toFixed(1)}</strong>
@@ -2208,7 +2745,7 @@
                     const evaluation = evaluate_rule(draft)
                     const items = evaluation.items
                     const preview = backdrop.querySelector('#custom-rule-preview')
-                    preview.innerHTML = `<strong>范围 ${evaluation.scopedCount} 条 → 命中 ${items.length} 条${evaluation.excludedCount ? `，缺少评分数据排除 ${evaluation.excludedCount} 条` : ''}</strong><div class="custom-preview-items">${items.slice(0, 5).map((item, index) => `
+                    preview.innerHTML = `<strong>条目范围交集 ${evaluation.scopedCount} 条 → 筛选命中 ${items.length} 条${evaluation.excludedCount ? `，缺少评分数据排除 ${evaluation.excludedCount} 条` : ''}</strong><div class="custom-preview-items">${items.slice(0, 5).map((item, index) => `
                         <button type="button" class="custom-preview-item" data-preview-index="${index}" title="点击查看评分明细">
                             <img src="${item.subject.images?.grid || ''}" loading="lazy" />
                             <span>${escapeHtml(getSubjectDisplayName(item.subject))}</span>
@@ -2219,16 +2756,31 @@
                 }
 
                 function fill_form(rule) {
-                    name_input.value = rule.name || '我的分类'
+                    name_input.value = rule.name || '我的规则'
+                    description_input.value = rule.description || ''
+                    const score_mode_button = backdrop.querySelector('#custom-score-mode-toggle')
+                    score_mode_button.dataset.scoreMode = rule.scoreMode === 'raw' ? 'raw' : 'hidden'
+                    score_mode_button.textContent = `评分依据：${score_mode_button.dataset.scoreMode === 'raw' ? '原始分' : '隐藏分'}`
                     const sets = get_rule_sets(rule)
                     my_set_select.value = sets.my
                     his_set_select.value = sets.his
                     backdrop.querySelector('#custom-rule-template').value = rule.sourcePreset || ''
                     for (const user of ['my', 'his']) {
+                        const selected_tiers = Object.prototype.hasOwnProperty.call(rule.filters || {}, `${user}_tiers`)
+                            ? rule.filters[`${user}_tiers`]
+                            : ['unrated', 'low', 'medium', 'high']
                         backdrop.querySelectorAll(`.tier-filter[data-user="${user}"]`).forEach(input => {
-                            input.checked = (rule.filters?.[`${user}_tiers`] || []).includes(input.value)
+                            input.checked = selected_tiers.includes(input.value)
                         })
-                        backdrop.querySelector(`#${user}-comment-filter`).value = rule.filters?.[`${user}_comment`] || 'any'
+                        const selected_types = Object.prototype.hasOwnProperty.call(rule.filters || {}, `${user}_types`)
+                            ? rule.filters[`${user}_types`].map(Number)
+                            : [1, 2, 3, 4, 5]
+                        backdrop.querySelectorAll(`.status-filter[data-user="${user}"]`).forEach(input => {
+                            input.checked = selected_types.includes(Number(input.value))
+                        })
+                        const comment_mode = rule.filters?.[`${user}_comment`] || 'any'
+                        const comment_input = backdrop.querySelector(`input[name="${user}-comment-filter"][value="${comment_mode}"]`)
+                        if (comment_input) comment_input.checked = true
                     }
                     for (const id of Object.keys(RANGE_FILTER_DEFS)) {
                         backdrop.querySelector(`.range-min[data-range="${id}"]`).value = rule.filters?.ranges?.[id]?.min ?? ''
@@ -2245,14 +2797,19 @@
                 }
 
                 backdrop.querySelector('#custom-rule-template').addEventListener('change', event => {
-                    const preset = PRESET_RULES[event.target.value]
+                    const preset = get_effective_preset(event.target.value)
                     if (!preset) return
                     const preserved_id = initial.id
                     initial = { ...JSON.parse(JSON.stringify(preset)), ...(preserved_id ? { id: preserved_id } : {}), sourcePreset: event.target.value }
-                    initial.name = `${preset.name} 自定义`
+                    initial.name = edit_preset_key ? DEFAULT_PRESET_RULES[edit_preset_key].name : `${preset.name} 自定义`
                     fill_form(initial)
                 })
-                backdrop.querySelectorAll('input,select').forEach(element => {
+                backdrop.querySelector('#custom-score-mode-toggle').addEventListener('click', event => {
+                    event.currentTarget.dataset.scoreMode = event.currentTarget.dataset.scoreMode === 'hidden' ? 'raw' : 'hidden'
+                    event.currentTarget.textContent = `评分依据：${event.currentTarget.dataset.scoreMode === 'raw' ? '原始分' : '隐藏分'}`
+                    update_preview()
+                })
+                backdrop.querySelectorAll('input,select,textarea').forEach(element => {
                     element.addEventListener('input', update_preview)
                     element.addEventListener('change', () => {
                         if (element.classList.contains('factor-enabled')) element.closest('.custom-factor-card').classList.toggle('enabled', element.checked)
@@ -2265,9 +2822,19 @@
                 })
                 backdrop.querySelector('[data-action="save"]').addEventListener('click', () => {
                     const draft = collect_draft()
-                    if (!draft.name) return alert('分类名称不能为空')
+                    if (edit_preset_key) {
+                        draft.name = DEFAULT_PRESET_RULES[edit_preset_key].name
+                        delete draft.id
+                        preset_rule_overrides[edit_preset_key] = draft
+                        persist_preset_overrides()
+                        analyze_config.current_sort = edit_preset_key
+                        backdrop.remove()
+                        refresh_custom_rule_ui()
+                        return
+                    }
+                    if (!draft.name) return alert('规则名称不能为空')
                     const duplicate = get_active_custom_rules().find(rule => rule.name === draft.name && rule.id !== draft.id)
-                    if (duplicate) return alert('分类名称不能重复')
+                    if (duplicate) return alert('规则名称不能重复')
                     const saved = put_custom_rule(draft)
                     analyze_config.current_sort = `custom:${saved.id}`
                     save_settings()
@@ -2277,10 +2844,213 @@
                 fill_form(initial)
             }
 
+            function open_custom_sort_editor(source_rule = null, copy_mode = false, edit_preset_key = null) {
+                const clone = value => JSON.parse(JSON.stringify(value))
+                let working = source_rule ? clone(source_rule) : {
+                    name: '我的规则', description: '', sourcePreset: null,
+                    sections: [make_section(`section-${Date.now().toString(36)}`, '结果')],
+                }
+                if (copy_mode) {
+                    delete working.id
+                    working.name = `${working.name} 副本`
+                }
+                const modal = create_element(`<div class="custom-sort-modal-backdrop"><section class="custom-sort-modal" role="dialog" aria-modal="true">
+                    <header class="custom-modal-header"><h2>${edit_preset_key ? `编辑默认规则：${DEFAULT_PRESET_RULES[edit_preset_key].name}` : source_rule && !copy_mode ? '编辑规则' : '新建规则'}</h2>
+                        <div class="custom-modal-actions"><button type="button" data-modal-action="cancel">取消</button><button type="button" data-modal-action="save">保存并应用</button></div>
+                    </header>
+                    <div class="custom-sort-form-grid">
+                        <label>名称<input id="multi-rule-name" maxlength="30"></label>
+                        <label>从默认规则开始<select id="multi-rule-template"><option value="">空白 / 保持当前</option>${Object.entries(DEFAULT_PRESET_RULES).map(([id, rule]) => `<option value="${id}">${escapeHtml(rule.name)}</option>`).join('')}</select></label>
+                        <label style="grid-column:1/-1">规则说明<textarea id="multi-rule-description" maxlength="300" rows="2" placeholder="可不填写"></textarea></label>
+                    </div>
+                    <div id="multi-section-tabs" class="rule-section-tabs" role="tablist" aria-label="规则分段"></div>
+                    <div id="multi-section-host"></div>
+                    <button type="button" id="add-rule-section" style="width:100%;margin-top:10px;padding:8px">＋ 新增分段</button>
+                    <div id="multi-rule-preview" class="custom-preview"></div>
+                </section></div>`)
+                document.body.append(modal)
+                const name_input = modal.querySelector('#multi-rule-name')
+                const description_input = modal.querySelector('#multi-rule-description')
+                const template_select = modal.querySelector('#multi-rule-template')
+                const section_tabs = modal.querySelector('#multi-section-tabs')
+                const section_host = modal.querySelector('#multi-section-host')
+                let active_section_id = working.sections[0]?.id || null
+                if (edit_preset_key) name_input.disabled = true
+
+                const set_options = (user, selected) => Object.entries(SET_MODE_DEFS)
+                    .filter(([value]) => !['important', 'not_important'].includes(value) || user === 'my')
+                    .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')
+                const tier_html = (section, user) => [['unrated', '未评分'], ['low', '差'], ['medium', '中'], ['high', '好']]
+                    .map(([value, label]) => `<label><input type="checkbox" class="section-tier" data-user="${user}" value="${value}" ${section.filters[`${user}_tiers`].includes(value) ? 'checked' : ''}>${label}</label>`).join('')
+                const status_html = (section, user) => [1, 2, 3, 4, 5]
+                    .map(value => `<label><input type="checkbox" class="section-status" data-user="${user}" value="${value}" ${section.filters[`${user}_types`].includes(value) ? 'checked' : ''}>${collTypeMap[value]}</label>`).join('')
+                const comment_html = (section, user) => [['any', '不限'], ['has', '有吐槽'], ['empty', '无吐槽']]
+                    .map(([value, label]) => `<label><input type="radio" name="${section.id}-${user}-comment" value="${value}" ${section.filters[`${user}_comment`] === value ? 'checked' : ''}>${label}</label>`).join('')
+                const factor_html = section => Object.entries(FACTOR_DEFS).map(([id, def]) => {
+                    const factor = section.factors.find(item => item.id === id)
+                    return `<div class="custom-factor-card${factor ? ' enabled' : ''}" data-factor-id="${id}">
+                        <label class="factor-switch"><input type="checkbox" class="factor-enabled" ${factor ? 'checked' : ''}> <strong>${def.label}</strong></label><span class="factor-group">${def.group}</span>
+                        <div class="factor-controls"><select class="factor-direction"><option value="positive" ${factor?.direction !== 'negative' ? 'selected' : ''}>${def.positive}</option><option value="negative" ${factor?.direction === 'negative' ? 'selected' : ''}>${def.negative}</option></select>
+                        <select class="factor-weight">${[1, 2, 3].map(weight => `<option value="${weight}" ${Number(factor?.weight || 2) === weight ? 'selected' : ''}>${['低', '中', '高'][weight - 1]}权重</option>`).join('')}</select></div></div>`
+                }).join('')
+                const range_html = section => Object.entries(RANGE_FILTER_DEFS).map(([id, def]) => `<label class="custom-range-row"><span>${def.label}</span>
+                    <input class="range-min" data-range="${id}" type="${def.type || 'number'}" value="${escapeHtml(section.filters.ranges?.[id]?.min ?? '')}" placeholder="最小"><span>—</span>
+                    <input class="range-max" data-range="${id}" type="${def.type || 'number'}" value="${escapeHtml(section.filters.ranges?.[id]?.max ?? '')}" placeholder="最大"></label>`).join('')
+
+                function collect_rule() {
+                    const card = section_host.querySelector('.rule-section-editor')
+                    let sections = working.sections
+                    if (card) {
+                        const original = working.sections.find(section => section.id === card.dataset.sectionId)
+                        const selected = (selector, user, number = false) => [...card.querySelectorAll(`${selector}[data-user="${user}"]:checked`)].map(input => number ? Number(input.value) : input.value)
+                        const ranges = {}
+                        for (const id of Object.keys(RANGE_FILTER_DEFS)) {
+                            const min = card.querySelector(`.range-min[data-range="${id}"]`).value
+                            const max = card.querySelector(`.range-max[data-range="${id}"]`).value
+                            if (min !== '' || max !== '') ranges[id] = { min: min || null, max: max || null }
+                        }
+                        const factors = [...card.querySelectorAll('.custom-factor-card')].filter(node => node.querySelector('.factor-enabled').checked).map(node => ({
+                            id: node.dataset.factorId, direction: node.querySelector('.factor-direction').value, weight: Number(node.querySelector('.factor-weight').value),
+                        }))
+                        const active_section = {
+                            id: original.id,
+                            name: card.querySelector('.section-name').value.trim(),
+                            description: card.querySelector('.section-description').value.trim(),
+                            limit: card.querySelector('.section-limit').value === 'all' ? null : Number(card.querySelector('.section-limit').value),
+                            appearance: card.querySelector('.section-muted').checked ? 'muted' : 'normal',
+                            sets: { my: card.querySelector('.section-my-set').value, his: card.querySelector('.section-his-set').value },
+                            filters: {
+                                my_tiers: selected('.section-tier', 'my'), his_tiers: selected('.section-tier', 'his'),
+                                my_types: selected('.section-status', 'my', true), his_types: selected('.section-status', 'his', true),
+                                my_comment: card.querySelector(`input[name="${original.id}-my-comment"]:checked`)?.value || 'any',
+                                his_comment: card.querySelector(`input[name="${original.id}-his-comment"]:checked`)?.value || 'any', ranges,
+                            },
+                            scoreMode: card.querySelector('.section-score-mode').value,
+                            missingScoreAsZero: card.querySelector('.section-missing-zero').checked,
+                            factors,
+                        }
+                        sections = working.sections.map(section => section.id === active_section.id ? active_section : section)
+                    }
+                    return { ...(working.id ? { id: working.id } : {}), name: name_input.value.trim(), description: description_input.value.trim(), sourcePreset: template_select.value || working.sourcePreset || null, sections }
+                }
+
+                function update_preview() {
+                    working = { ...working, ...collect_rule() }
+                    const evaluation = evaluate_rule(working)
+                    const active = evaluation.sections.find(({ section }) => section.id === active_section_id)
+                    modal.querySelector('#multi-rule-preview').innerHTML = active ? `
+                        <section class="section-preview"><strong>${escapeHtml(active.section.name || '未命名分段')}：命中 ${active.filteredCount}，可排序 ${active.totalSortedCount}，显示 ${active.items.length}${active.excludedCount ? `，缺少评分 ${active.excludedCount}` : ''}</strong>
+                        <div class="custom-preview-items">${active.items.slice(0, 8).map(item => `<div class="custom-preview-item"><img src="${item.subject.images?.grid || ''}" loading="lazy"><span>${escapeHtml(getSubjectDisplayName(item.subject))}</span>${item._custom_score == null ? '' : `<b>${item._custom_score.toFixed(1)}</b>`}</div>`).join('')}</div></section>
+                    ` : '<span>请新增至少一个分段。</span>'
+                }
+
+                function render_sections() {
+                    name_input.value = working.name || '我的规则'
+                    description_input.value = working.description || ''
+                    template_select.value = working.sourcePreset || ''
+                    if (!working.sections.some(section => section.id === active_section_id)) active_section_id = working.sections[0]?.id || null
+                    section_tabs.innerHTML = working.sections.map((section, index) => `<button type="button" class="rule-section-tab${section.id === active_section_id ? ' active' : ''}" role="tab" aria-selected="${section.id === active_section_id}" data-section-tab="${escapeHtml(section.id)}" title="${escapeHtml(section.name)}">${index + 1}</button>`).join('')
+                    const index = working.sections.findIndex(section => section.id === active_section_id)
+                    const section = working.sections[index]
+                    section_host.innerHTML = section ? `<section class="rule-section-editor" data-section-id="${escapeHtml(section.id)}">
+                        <header><strong>分段 ${index + 1}</strong><div><button type="button" data-section-action="up" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" data-section-action="down" ${index === working.sections.length - 1 ? 'disabled' : ''}>↓</button><button type="button" data-section-action="copy">复制</button><button type="button" data-section-action="delete" ${working.sections.length === 1 ? 'disabled' : ''}>删除</button></div></header>
+                        <div class="custom-sort-form-grid"><label>分段名称<input class="section-name" maxlength="30" value="${escapeHtml(section.name)}"></label>
+                        <label>显示数量<select class="section-limit">${[['5','前5项'],['10','前10项'],['20','前20项'],['50','前50项'],['all','全部']].map(([value,label]) => `<option value="${value}" ${(section.limit == null ? 'all' : String(section.limit)) === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+                        <label style="grid-column:1/-1">分段说明<textarea class="section-description" maxlength="300" rows="2" placeholder="可不填写">${escapeHtml(section.description || '')}</textarea></label></div>
+                        <div class="section-inline-options"><label>我的范围<select class="section-my-set">${set_options('my', section.sets.my)}</select></label><label>对方范围<select class="section-his-set">${set_options('his', section.sets.his)}</select></label>
+                        <label>评分依据<select class="section-score-mode"><option value="hidden" ${section.scoreMode === 'hidden' ? 'selected' : ''}>隐藏分</option><option value="raw" ${section.scoreMode === 'raw' ? 'selected' : ''}>原始分</option></select></label>
+                        <label><input type="checkbox" class="section-missing-zero" ${section.missingScoreAsZero ? 'checked' : ''}>缺失评分按 0</label><label><input type="checkbox" class="section-muted" ${section.appearance === 'muted' ? 'checked' : ''}>弱化显示</label></div>
+                        <div class="custom-filter-grid"><div><b>我的评分档位</b><div class="custom-chip-row">${tier_html(section,'my')}</div></div><div><b>对方评分档位</b><div class="custom-chip-row">${tier_html(section,'his')}</div></div>
+                        <div><b>我的收藏状态</b><div class="custom-chip-row">${status_html(section,'my')}</div></div><div><b>对方收藏状态</b><div class="custom-chip-row">${status_html(section,'his')}</div></div>
+                        <div><b>我的吐槽</b><div class="custom-radio-row">${comment_html(section,'my')}</div></div><div><b>对方吐槽</b><div class="custom-radio-row">${comment_html(section,'his')}</div></div></div>
+                        <details class="custom-advanced-filter"><summary>高级数值范围</summary>${range_html(section)}</details>
+                        <h3>综合评分</h3><div class="custom-factor-grid">${factor_html(section)}</div>
+                    </section>` : ''
+                    section_host.querySelectorAll('.factor-enabled').forEach(input => input.addEventListener('change', () => input.closest('.custom-factor-card').classList.toggle('enabled', input.checked)))
+                    update_preview()
+                }
+
+                section_host.addEventListener('input', update_preview)
+                section_host.addEventListener('change', update_preview)
+                section_tabs.addEventListener('click', event => {
+                    const tab = event.target.closest('[data-section-tab]')
+                    if (!tab || tab.dataset.sectionTab === active_section_id) return
+                    working = { ...working, ...collect_rule() }
+                    active_section_id = tab.dataset.sectionTab
+                    render_sections()
+                })
+                section_host.addEventListener('click', event => {
+                    const action = event.target.dataset.sectionAction
+                    if (!action || event.target.disabled) return
+                    working = { ...working, ...collect_rule() }
+                    const card = event.target.closest('.rule-section-editor')
+                    const index = working.sections.findIndex(section => section.id === card.dataset.sectionId)
+                    if (action === 'up' || action === 'down') {
+                        const target = index + (action === 'up' ? -1 : 1)
+                        ;[working.sections[index], working.sections[target]] = [working.sections[target], working.sections[index]]
+                    }
+                    if (action === 'copy') {
+                        const copied = clone(working.sections[index])
+                        copied.id = `section-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+                        copied.name += ' 副本'
+                        working.sections.splice(index + 1, 0, copied)
+                        active_section_id = copied.id
+                    }
+                    if (action === 'delete') {
+                        working.sections.splice(index, 1)
+                        active_section_id = working.sections[Math.min(index, working.sections.length - 1)]?.id || null
+                    }
+                    render_sections()
+                })
+                modal.querySelector('#add-rule-section').addEventListener('click', () => {
+                    working = { ...working, ...collect_rule() }
+                    const added = make_section(`section-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, `分段 ${working.sections.length + 1}`)
+                    working.sections.push(added)
+                    active_section_id = added.id
+                    render_sections()
+                })
+                template_select.addEventListener('change', event => {
+                    if (!event.target.value) return
+                    const preserved_id = working.id
+                    working = clone(get_effective_preset(event.target.value))
+                    if (preserved_id) working.id = preserved_id
+                    working.sourcePreset = event.target.value
+                    working.name = edit_preset_key ? DEFAULT_PRESET_RULES[edit_preset_key].name : `${working.name} 自定义`
+                    active_section_id = working.sections[0]?.id || null
+                    render_sections()
+                })
+                name_input.addEventListener('input', update_preview)
+                description_input.addEventListener('input', update_preview)
+                modal.querySelector('[data-modal-action="cancel"]').addEventListener('click', () => modal.remove())
+                modal.addEventListener('click', event => { if (event.target === modal) modal.remove() })
+                modal.querySelector('[data-modal-action="save"]').addEventListener('click', () => {
+                    const draft = collect_rule()
+                    if (!draft.name) return alert('规则名称不能为空')
+                    if (!draft.sections.length || draft.sections.some(section => !section.name)) return alert('每个分段都需要名称')
+                    if (edit_preset_key) {
+                        draft.name = DEFAULT_PRESET_RULES[edit_preset_key].name
+                        delete draft.id
+                        preset_rule_overrides[edit_preset_key] = draft
+                        persist_preset_overrides()
+                        analyze_config.current_sort = edit_preset_key
+                    } else {
+                        const duplicate = get_active_custom_rules().find(rule => rule.name === draft.name && rule.id !== draft.id)
+                        if (duplicate) return alert('规则名称不能重复')
+                        const saved = put_custom_rule(draft)
+                        analyze_config.current_sort = `custom:${saved.id}`
+                    }
+                    save_settings()
+                    modal.remove()
+                    refresh_custom_rule_ui()
+                })
+                render_sections()
+            }
+
             function bind_sort_tab(tab) {
                 tab.addEventListener('click', () => {
                     $page.querySelectorAll('.sort-tab[data-sort]').forEach(item => item.classList.remove('active'))
                     tab.classList.add('active')
+                    if (analyze_config.current_sort !== tab.dataset.sort) expanded_result_sections.clear()
                     analyze_config.current_sort = tab.dataset.sort
                     save_settings()
                     refreshList()
@@ -2300,19 +3070,40 @@
                             menu.remove()
                             if (action === 'edit') open_custom_sort_editor(rule)
                             if (action === 'copy') open_custom_sort_editor(rule, true)
-                            if (action === 'delete' && confirm(`删除分类“${rule.name}”？`)) {
+                            if (action === 'delete' && confirm(`删除规则“${rule.name}”？`)) {
                                 delete_custom_rule(rule.id)
                                 refresh_custom_rule_ui()
                             }
                         })
                         setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0)
                     })
-                } else if (PRESET_RULES[tab.dataset.sort]) {
-                    tab.title = '左键应用，右键复制为我的分类'
+                } else if (DEFAULT_PRESET_RULES[tab.dataset.sort]) {
+                    tab.title = '左键应用，右键编辑、复制或恢复默认'
                     tab.addEventListener('contextmenu', event => {
                         event.preventDefault()
-                        const preset = { ...JSON.parse(JSON.stringify(PRESET_RULES[tab.dataset.sort])), sourcePreset: tab.dataset.sort }
-                        open_custom_sort_editor(preset, true)
+                        document.querySelector('.custom-context-menu')?.remove()
+                        const sort_key = tab.dataset.sort
+                        const menu = create_element(`<div class="custom-context-menu" style="left:${event.clientX}px;top:${event.clientY}px">
+                            <button data-action="edit">编辑规则</button>
+                            <button data-action="copy">复制为我的规则</button>
+                            <button data-action="reset" ${preset_rule_overrides[sort_key] ? '' : 'disabled'}>恢复默认</button>
+                        </div>`)
+                        document.body.append(menu)
+                        menu.addEventListener('click', menu_event => {
+                            const action = menu_event.target.dataset.action
+                            if (!action || menu_event.target.disabled) return
+                            menu.remove()
+                            const preset = { ...JSON.parse(JSON.stringify(get_effective_preset(sort_key))), sourcePreset: sort_key }
+                            if (action === 'edit') open_custom_sort_editor(preset, false, sort_key)
+                            if (action === 'copy') open_custom_sort_editor(preset, true)
+                            if (action === 'reset') {
+                                if (!confirm(`恢复“${DEFAULT_PRESET_RULES[sort_key].name}”的默认规则？`)) return
+                                delete preset_rule_overrides[sort_key]
+                                persist_preset_overrides()
+                                refresh_custom_rule_ui()
+                            }
+                        })
+                        setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0)
                     })
                 }
             }
@@ -2323,7 +3114,7 @@
                 if (analyze_config.current_sort.startsWith('custom:')) {
                     const current = custom_sort_document.rules[analyze_config.current_sort.slice(7)]
                     if (!current || current.deletedAt) {
-                        analyze_config.current_sort = 'common_love'
+                        analyze_config.current_sort = 'important'
                         save_settings()
                     }
                 }
@@ -2336,12 +3127,109 @@
             }
 
             window.__鉴定_refresh_custom_rules = refresh_custom_buttons_local
+            window.__鉴定_refresh_current_list = refreshList
 
             updateDescription()
 
             // 切换排序 tab
             $page.querySelectorAll('.sort-tab[data-sort]').forEach(bind_sort_tab)
             document.getElementById('new-custom-sort').addEventListener('click', () => open_custom_sort_editor())
+
+            // 切换本地缓存中的对方 / 批量载入好友
+            const opponentButton = document.getElementById('opponent-select-btn')
+            const opponentMenu = document.getElementById('opponent-menu')
+            opponentButton.addEventListener('click', async event => {
+                event.stopPropagation()
+                const opening = opponentMenu.style.display === 'none'
+                opponentMenu.style.display = opening ? 'block' : 'none'
+                if (opening) await render_opponent_menu()
+            })
+            opponentMenu.addEventListener('click', async event => {
+                event.stopPropagation()
+                const action = event.target.closest('[data-opponent-action]')?.dataset.opponentAction
+                const username = event.target.closest('[data-opponent-username]')?.dataset.opponentUsername
+                const cache_button = event.target.closest('[data-cache-action]')
+                if (cache_button) {
+                    const cache_username = cache_button.dataset.cacheUsername
+                    cache_button.disabled = true
+                    if (cache_button.dataset.cacheAction === 'refresh') {
+                        try {
+                            const user = await load_manager_async.get_user(cache_username, true)
+                            await load_manager_async.get_coll(user.username, true)
+                            set_user_cache_time(user.username)
+                            if (cache_username === cur_user2.username) {
+                                cur_user2 = user
+                                await inject_analyze_page(false)
+                            } else if (cache_username === cur_user1.username) {
+                                cur_user1 = user
+                                comparison_username = user.username
+                                await inject_analyze_page(false)
+                            } else {
+                                await render_opponent_menu()
+                            }
+                        } catch (error) {
+                            alert(`刷新缓存失败：${error.message || error}`)
+                            cache_button.disabled = false
+                        }
+                    }
+                    if (cache_button.dataset.cacheAction === 'delete') {
+                        await api_cache.deleteUserCache(cache_username)
+                        delete_user_cache_time(cache_username)
+                        delete recent_opponents[cache_username]
+                        localStorage.setItem(RECENT_OPPONENTS_KEY, JSON.stringify(recent_opponents))
+                        await render_opponent_menu()
+                    }
+                    return
+                }
+                if (action === 'friends') {
+                    opponentMenu.style.display = 'none'
+                    await open_friend_loader()
+                }
+                if (username && username !== cur_user1.username) {
+                    opponentMenu.style.display = 'none'
+                    opponentButton.disabled = true
+                    try {
+                        comparison_username = username
+                        cur_user1 = await load_manager_async.get_user(username)
+                        await inject_analyze_page(false)
+                    } catch (error) {
+                        alert(`切换对方失败：${error.message || error}`)
+                        opponentButton.disabled = false
+                    }
+                }
+            })
+            opponentMenu.addEventListener('submit', async event => {
+                if (event.target.id !== 'opponent-search-form') return
+                event.preventDefault()
+                event.stopPropagation()
+                const input = event.target.querySelector('#opponent-search-input')
+                const status = event.target.querySelector('#opponent-search-status')
+                const submit = event.target.querySelector('button[type="submit"]')
+                const username = input.value.trim().replace(/^@/, '')
+                if (!isValidUsernameInput(username)) {
+                    status.textContent = '请输入有效的 @用户名'
+                    status.style.color = '#d33'
+                    return
+                }
+                submit.disabled = true
+                status.style.color = '#888'
+                status.textContent = '正在读取用户资料和收藏…'
+                try {
+                    const user = await load_manager_async.get_user(username, true)
+                    await load_manager_async.get_coll(user.username)
+                    set_user_cache_time(user.username)
+                    mark_opponent_viewed(user.username)
+                    await prune_cached_opponents(self_username)
+                    status.style.color = '#188038'
+                    status.textContent = `已添加 ${user.nickname || user.username}`
+                    await render_opponent_menu()
+                } catch (error) {
+                    submit.disabled = false
+                    status.style.color = '#d33'
+                    status.textContent = `添加失败：${error.message || error}`
+                }
+            })
+            document.addEventListener('click', () => { opponentMenu.style.display = 'none' })
 
             // 手机端设置折叠与通用底部面板
             document.getElementById('mobile-settings-toggle').addEventListener('click', event => {
@@ -2356,21 +3244,12 @@
             document.addEventListener('keydown', event => {
                 if (event.key === 'Escape') close_mobile_sheet()
             })
-            document.getElementById('mobile-score-distribution').addEventListener('click', () => {
-                open_mobile_sheet('隐藏分与评分分布', document.getElementById('hidden-score-overlay').innerHTML)
-            })
-            document.getElementById('simi-toggle-btn').addEventListener('click', event => {
-                if (!is_touch_mode()) return
-                event.preventDefault()
-                open_mobile_sheet('好友评级', document.getElementById('simi-overlay').innerHTML)
-            })
-
             document.getElementById('mobile-sort-manage').addEventListener('click', () => {
                 const sort_key = analyze_config.current_sort
                 if (sort_key.startsWith('custom:')) {
                     const rule = custom_sort_document.rules[sort_key.slice('custom:'.length)]
                     if (!rule || rule.deletedAt) return
-                    open_mobile_sheet(`管理分类：${rule.name}`, `
+                    open_mobile_sheet(`管理规则：${rule.name}`, `
                         <div class="mobile-sheet-actions">
                             <button type="button" data-rule-action="edit">编辑</button>
                             <button type="button" data-rule-action="copy">复制</button>
@@ -2382,7 +3261,7 @@
                             close_mobile_sheet()
                             if (action === 'edit') open_custom_sort_editor(rule)
                             if (action === 'copy') open_custom_sort_editor(rule, true)
-                            if (action === 'delete' && confirm(`删除分类“${rule.name}”？`)) {
+                            if (action === 'delete' && confirm(`删除规则“${rule.name}”？`)) {
                                 delete_custom_rule(rule.id)
                                 refresh_custom_rule_ui()
                             }
@@ -2390,13 +3269,27 @@
                     })
                     return
                 }
-                const preset = PRESET_RULES[sort_key] || PRESET_RULES.common_love
-                open_mobile_sheet(`分类操作：${preset.name}`, `
-                    <div class="mobile-sheet-actions"><button type="button" data-rule-action="copy">复制为我的分类</button></div>
+                const preset = get_effective_preset(sort_key)
+                open_mobile_sheet(`规则操作：${preset.name}`, `
+                    <div class="mobile-sheet-actions">
+                        <button type="button" data-rule-action="edit">编辑规则</button>
+                        <button type="button" data-rule-action="copy">复制为我的规则</button>
+                        <button type="button" data-rule-action="reset" ${preset_rule_overrides[sort_key] ? '' : 'disabled'}>恢复默认</button>
+                    </div>
                 `, content => {
-                    content.querySelector('[data-rule-action="copy"]').addEventListener('click', () => {
+                    content.addEventListener('click', event => {
+                        const action = event.target.dataset.ruleAction
+                        if (!action || event.target.disabled) return
                         close_mobile_sheet()
-                        open_custom_sort_editor({ ...JSON.parse(JSON.stringify(preset)), sourcePreset: sort_key }, true)
+                        const source = { ...JSON.parse(JSON.stringify(preset)), sourcePreset: sort_key }
+                        if (action === 'edit') open_custom_sort_editor(source, false, sort_key)
+                        if (action === 'copy') open_custom_sort_editor(source, true)
+                        if (action === 'reset') {
+                            if (!confirm(`恢复“${DEFAULT_PRESET_RULES[sort_key].name}”的默认规则？`)) return
+                            delete preset_rule_overrides[sort_key]
+                            persist_preset_overrides()
+                            refresh_custom_rule_ui()
+                        }
                     })
                 })
             })
@@ -2407,6 +3300,41 @@
                 event.currentTarget.textContent = analyze_config.score_display === 'hidden' ? '显示：隐藏分' : '显示：原始分'
                 save_settings()
                 refreshList()
+            })
+
+            // 评分分布与好友评级改为点击开关；触屏设备继续使用底部面板
+            const hidden_score_container = document.getElementById('hidden-score-container')
+            const hidden_score_overlay = document.getElementById('hidden-score-overlay')
+            const simi_container = document.getElementById('simi-container')
+            const hidden_chart_tooltip = document.getElementById('hidden-chart-tooltip')
+            document.getElementById('score-distribution-toggle').addEventListener('click', event => {
+                event.stopPropagation()
+                if (is_touch_mode()) return open_mobile_sheet('隐藏分与评分分布', hidden_score_overlay.innerHTML)
+                simi_container.classList.remove('is-open')
+                hidden_score_container.classList.toggle('is-open')
+            })
+            document.getElementById('friend-rating-toggle').addEventListener('click', event => {
+                event.stopPropagation()
+                if (is_touch_mode()) return open_mobile_sheet('好友评级', document.getElementById('simi-overlay').innerHTML)
+                hidden_score_container.classList.remove('is-open')
+                simi_container.classList.toggle('is-open')
+            })
+            hidden_score_overlay.addEventListener('click', event => event.stopPropagation())
+            document.getElementById('simi-overlay').addEventListener('click', event => event.stopPropagation())
+            document.addEventListener('click', () => {
+                hidden_score_container.classList.remove('is-open')
+                simi_container.classList.remove('is-open')
+            })
+            hidden_score_overlay.querySelectorAll('.hidden-chart-point').forEach(point => {
+                point.addEventListener('mouseenter', event => {
+                    const rate = Number(event.currentTarget.dataset.rate)
+                    const rect = hidden_score_overlay.getBoundingClientRect()
+                    hidden_chart_tooltip.textContent = `${rate}分：我 ${result.my_all_rate_count_map[rate] || 0}，对方 ${result.his_all_rate_count_map[rate] || 0}`
+                    hidden_chart_tooltip.style.left = `${Math.max(4, Math.min(event.clientX - rect.left + 8, rect.width - 150))}px`
+                    hidden_chart_tooltip.style.top = `${event.clientY - rect.top - 4}px`
+                    hidden_chart_tooltip.style.display = 'block'
+                })
+                point.addEventListener('mouseleave', () => { hidden_chart_tooltip.style.display = 'none' })
             })
 
             // 自定义规则云同步菜单
@@ -2422,13 +3350,62 @@
                 const action = event.target.dataset.cloudAction
                 if (!action) return
                 cloud_sync_menu.style.display = 'none'
-                if (action === 'sync') await sync_custom_sorts()
+                if (action === 'sync') {
+                    await sync_custom_sorts()
+                    await sync_important_subjects()
+                    await sync_threshold_profile()
+                }
                 if (action === 'export') {
-                    const blob = new Blob([JSON.stringify(custom_sort_document, null, 2)], { type: 'application/json' })
+                    const exported_document = {
+                        schemaVersion: 4,
+                        rules: Object.fromEntries(Object.entries(custom_sort_document.rules).filter(([, rule]) => !rule.deletedAt)),
+                    }
+                    const blob = new Blob([JSON.stringify(exported_document, null, 2)], { type: 'application/json' })
                     const url = URL.createObjectURL(blob)
                     const anchor = document.createElement('a')
                     anchor.href = url
-                    anchor.download = `鉴定_自定义分类_v2_${new Date().toISOString().slice(0, 10)}.json`
+                    const now = new Date()
+                    const pad = number => String(number).padStart(2, '0')
+                    const exported_at = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+                    anchor.download = `(${self_username}) 影之智慧自定义规则 (${exported_at}).json`
+                    anchor.click()
+                    URL.revokeObjectURL(url)
+                }
+                if (action === 'export-important') {
+                    const active_entries = Object.values(important_subject_document.subjects).filter(entry => entry.marked)
+                    const subject_map = new Map(result.comparison_items.map(item => [Number(item.subject.id), item.subject]))
+                    let cursor = 0
+                    const worker = async () => {
+                        while (cursor < active_entries.length) {
+                            const entry = active_entries[cursor++]
+                            if (subject_map.has(entry.id)) continue
+                            try {
+                                const response = await fetchWithTimeout(`https://api.bgm.tv/v0/subjects/${entry.id}`, {}, 8000)
+                                if (response.ok) subject_map.set(entry.id, await response.json())
+                            } catch (error) { /* 导出时保留未知名称占位 */ }
+                        }
+                    }
+                    await Promise.all(Array.from({ length: Math.min(4, active_entries.length) }, worker))
+                    const exported_subjects = Object.fromEntries(active_entries.map(entry => {
+                        const subject = subject_map.get(entry.id)
+                        return [entry.id, {
+                            ...entry,
+                            name_cn: subject?.name_cn || subject?.name || '未知',
+                            name: subject?.name || subject?.name_cn || '未知',
+                        }]
+                    }))
+                    const exported_document = {
+                        schemaVersion: 1,
+                        subjects: exported_subjects,
+                    }
+                    const blob = new Blob([JSON.stringify(exported_document, null, 2)], { type: 'application/json' })
+                    const url = URL.createObjectURL(blob)
+                    const anchor = document.createElement('a')
+                    const now = new Date()
+                    const pad = number => String(number).padStart(2, '0')
+                    const exported_at = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
+                    anchor.href = url
+                    anchor.download = `(${self_username}) 影之智慧重要番剧 (${exported_at}).json`
                     anchor.click()
                     URL.revokeObjectURL(url)
                 }
@@ -2460,16 +3437,56 @@
                     })
                     input.click()
                 }
+                if (action === 'import-important') {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = 'application/json'
+                    input.addEventListener('change', async () => {
+                        const file = input.files?.[0]
+                        if (!file) return
+                        try {
+                            const imported = parse_important_subject_document(await file.text(), true)
+                            let offset = 0
+                            for (const entry of Object.values(imported.subjects)) {
+                                if (!entry.marked) continue
+                                important_subject_document.subjects[entry.id] = {
+                                    id: entry.id,
+                                    marked: true,
+                                    updatedAt: Date.now() + offset++,
+                                    deviceId: device_id,
+                                }
+                            }
+                            rebuild_important_subject_ids()
+                            persist_important_subjects()
+                            schedule_important_subject_sync()
+                            refresh_important_subject_ui()
+                        } catch (error) {
+                            alert(`导入重要番剧失败：${error.message || error}`)
+                        }
+                    })
+                    input.click()
+                }
+                if (action === 'reset-rules') {
+                    if (!confirm('重置本地和云端的全部自定义规则及默认规则修改？重要番剧和阈值设置会保留。')) return
+                    custom_sort_document = { schemaVersion: 4, rules: {} }
+                    custom_sort_data_error = ''
+                    for (const key of Object.keys(preset_rule_overrides)) delete preset_rule_overrides[key]
+                    persist_custom_sort_document()
+                    persist_preset_overrides()
+                    localStorage.removeItem(CUSTOM_SORTS_PENDING_KEY)
+                    analyze_config.current_sort = 'important'
+                    save_settings()
+                    if (typeof window.chiiApp?.cloud_settings !== 'undefined') {
+                        chiiApp.cloud_settings.update({ [CUSTOM_SORTS_CLOUD_KEY]: JSON.stringify(custom_sort_document) })
+                        await Promise.resolve(chiiApp.cloud_settings.save())
+                        set_cloud_sync_status('synced')
+                    } else {
+                        set_cloud_sync_status('local', '云设置不可用，已重置本地规则')
+                    }
+                    refresh_custom_rule_ui()
+                }
             })
             document.addEventListener('click', () => { cloud_sync_menu.style.display = 'none' })
-
-            // 显示数量下拉框
-            document.getElementById('display-count-select').addEventListener('change', (e) => {
-                analyze_config.display_count = parseInt(e.target.value)
-                save_settings()
-                update_mobile_settings_summary()
-                refreshList()
-            })
 
             // ── 评分分段滑块 ──
 
@@ -2498,18 +3515,42 @@
                 return { low: bestLow, high: bestHigh }
             }
 
+            function calcThresholdRatios(rateMap, low, high) {
+                let low_count = 0, medium_count = 0, high_count = 0
+                for (let score = 1; score <= 10; score++) {
+                    const count = rateMap[score] || 0
+                    if (score <= low) low_count += count
+                    else if (score <= high) medium_count += count
+                    else high_count += count
+                }
+                const total = low_count + medium_count + high_count
+                return total > 0
+                    ? { low: low_count / total, medium: medium_count / total, high: high_count / total }
+                    : { low: 1 / 3, medium: 1 / 3, high: 1 / 3 }
+            }
+
+            function matchThresholdRatios(rateMap, target) {
+                let best = autoBalanceThresholds(rateMap)
+                let best_error = Infinity
+                for (let low = 1; low <= 8; low++) {
+                    for (let high = low + 1; high <= 9; high++) {
+                        const ratios = calcThresholdRatios(rateMap, low, high)
+                        const error = (ratios.low - target.low) ** 2 + (ratios.medium - target.medium) ** 2 + (ratios.high - target.high) ** 2
+                        if (error < best_error) {
+                            best_error = error
+                            best = { low, high }
+                        }
+                    }
+                }
+                return best
+            }
+
             function updateSliderTrack(container, lowVal, highVal) {
                 const track = container.querySelector('.slider-track')
                 const lowPercent = (lowVal / 10 * 100).toFixed(1)
                 const highPercent = (highVal / 10 * 100).toFixed(1)
+                track.innerHTML = ''
                 track.style.background = `linear-gradient(to right, #04f 0%, #04f ${lowPercent}%, #fc0 ${lowPercent}%, #fc0 ${highPercent}%, #f40 ${highPercent}%, #f40 100%)`
-            }
-
-            function updateThresholdLabel(labelEl, lowVal, highVal) {
-                const lowPart = lowVal === 0 ? '无差' : `1-${lowVal}差`
-                const midPart = `${lowVal === 0 ? 1 : lowVal + 1}-${highVal === 10 ? 10 : highVal}中`
-                const highPart = highVal === 10 ? '无好' : `${highVal + 1}-10好`
-                labelEl.textContent = `${lowPart} ${midPart} ${highPart}`
             }
 
             function updatePercentBar(userType) {
@@ -2523,6 +3564,7 @@
                 if (total === 0) { barEl.innerHTML = '<div style="width:100%;height:100%;background:#ccc;border-radius:3px;"></div>'; return }
                 const lighten = { '#04f': 'rgba(60,130,255,0.5)', '#fc0': 'rgba(180,140,0,0.5)', '#f40': 'rgba(255,123,90,0.5)' }
                 const getColor = (r) => r <= lowT ? '#04f' : r <= highT ? '#fc0' : '#f40'
+                const boundary_scores = new Set([lowT, lowT + 1, highT, highT + 1].filter(score => score >= 1 && score <= 10))
                 const active = []
                 for (let i = 1; i <= 10; i++) if (rateMap[i] > 0) active.push({ score: i, count: rateMap[i], color: getColor(i) })
                 let html = ''
@@ -2536,14 +3578,19 @@
                     const rL = (!prev || prev.color !== color) ? '2px' : '0'
                     const rR = (!next || next.color !== color) ? '2px' : '0'
                     const borderR = (next && next.color === color) ? `border-right:2px solid ${lighten[color]};` : ''
-                    html += `<div style="flex:${count};background:${color};min-width:0;border-radius:${rL} ${rR} ${rR} ${rL};${borderR}"></div>`
+                    const score_label = boundary_scores.has(active[j].score) ? `<span class="percent-score-label${color === '#fc0' ? ' __medium' : ''}">${active[j].score}</span>` : ''
+                    html += `<div style="position:relative;flex:${count};background:${color};min-width:0;overflow:hidden;border-radius:${rL} ${rR} ${rR} ${rL};${borderR}">${score_label}</div>`
                 }
                 barEl.innerHTML = html
             }
 
             // 初始化滑块
-            const myBalance = autoBalanceThresholds(result.my_rate_count_map)
-            const hisBalance = autoBalanceThresholds(result.his_rate_count_map)
+            const automatic_my_balance = autoBalanceThresholds(result.my_rate_count_map)
+            const target_ratios = threshold_profile?.ratios || calcThresholdRatios(result.my_rate_count_map, automatic_my_balance.low, automatic_my_balance.high)
+            const myBalance = threshold_profile?.ratios
+                ? matchThresholdRatios(result.my_rate_count_map, target_ratios)
+                : automatic_my_balance
+            const hisBalance = matchThresholdRatios(result.his_rate_count_map, target_ratios)
             analyze_config.my_threshold_low = myBalance.low
             analyze_config.my_threshold_high = myBalance.high
             analyze_config.his_threshold_low = hisBalance.low
@@ -2558,8 +3605,6 @@
             document.querySelectorAll('.dual-range-container').forEach(container => {
                 const user = container.dataset.user
                 updateSliderTrack(container, analyze_config[user + '_threshold_low'], analyze_config[user + '_threshold_high'])
-                const label = container.closest('.threshold-slider-row').querySelector('.threshold-label')
-                updateThresholdLabel(label, analyze_config[user + '_threshold_low'], analyze_config[user + '_threshold_high'])
             })
             updatePercentBar('my')
             updatePercentBar('his')
@@ -2580,40 +3625,21 @@
                     analyze_config[user + '_threshold_low'] = lowVal
                     analyze_config[user + '_threshold_high'] = highVal
                     updateSliderTrack(container, lowVal, highVal)
-                    const label = container.closest('.threshold-slider-row').querySelector('.threshold-label')
-                    updateThresholdLabel(label, lowVal, highVal)
                     updatePercentBar(user)
+                    if (user === 'my') {
+                        const ratios = calcThresholdRatios(result.my_rate_count_map, lowVal, highVal)
+                        save_threshold_profile(ratios)
+                        const matched_his = matchThresholdRatios(result.his_rate_count_map, ratios)
+                        analyze_config.his_threshold_low = matched_his.low
+                        analyze_config.his_threshold_high = matched_his.high
+                        const his_container = document.querySelector('.dual-range-container[data-user="his"]')
+                        his_container.querySelector('.range-low').value = matched_his.low
+                        his_container.querySelector('.range-high').value = matched_his.high
+                        updateSliderTrack(his_container, matched_his.low, matched_his.high)
+                        updatePercentBar('his')
+                    }
                     refreshList()
                 })
-            })
-
-            // 收藏类型下拉菜单
-            const typeFilterBtn = document.getElementById('type-filter-btn')
-            const typeFilterMenu = document.getElementById('type-filter-menu')
-            typeFilterBtn.addEventListener('click', (e) => {
-                e.stopPropagation()
-                typeFilterMenu.style.display = typeFilterMenu.style.display === 'none' ? 'block' : 'none'
-            })
-            typeFilterMenu.addEventListener('click', (e) => {
-                e.stopPropagation()
-            })
-            document.addEventListener('click', () => {
-                if (typeFilterMenu.style.display === 'none') return
-                typeFilterMenu.style.display = 'none'
-                const next = {}
-                for (const user of ['my', 'his']) {
-                    next[user] = [...$page.querySelectorAll(`.type-filter-cb[data-user="${user}"]:checked`)].map(c => Number(c.dataset.type))
-                }
-                const changed = ['my', 'his'].some(user => {
-                    const old_types = analyze_config[`${user}_filter_types`]
-                    return next[user].length !== old_types.length || next[user].some(type => !old_types.includes(type))
-                })
-                if (changed) {
-                    analyze_config.my_filter_types = next.my
-                    analyze_config.his_filter_types = next.his
-                    save_settings()
-                    inject_analyze_page(false)
-                }
             })
 
             // 条目类型多选菜单
@@ -2644,30 +3670,11 @@
                 await apply_subject_type_selection()
             })
 
-            // 吐槽开关
-            document.getElementById('show-comments-toggle').addEventListener('change', (e) => {
-                analyze_config.show_comments = e.target.checked
-                save_settings()
-                refreshList()
-            })
-
             // 反馈链接
             document.getElementById('feedback-link').addEventListener('click', (e) => {
                 e.preventDefault()
                 e.stopPropagation()
                 window.open(FEEDBACK_URL, '_blank')
-            })
-
-            // 强制更新缓存
-            document.getElementById('force-update-btn').addEventListener('click', async () => {
-                const btn = document.getElementById('force-update-btn')
-                btn.textContent = '更新中...'
-                btn.disabled = true
-                try {
-                    await inject_analyze_page(true)
-                } catch (e) {
-                    alert(`更新失败: ${e.message}`)
-                }
             })
 
         } catch (e) {
