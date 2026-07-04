@@ -1,4 +1,4 @@
-$url = 'https://bgm.tv/user/shironegi?ying-shi=1'
+$url = 'https://bgm.tv/user/shironegi?shadow=1'
 Start-Process -FilePath "microsoft-edge:$url"
 
 Start-Sleep -Milliseconds 500

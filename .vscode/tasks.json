@@ -2,11 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "测试：打开影实测试（默认用户）",
+            "label": "测试：打开 Shadow（默认用户）",
             "type": "shell",
             "command": "Start-Process",
             "args": [
-                "https://bgm.tv/user/wataame?ying-shi-test=1"
+                "https://bgm.tv/user/wataame?shadow=1"
             ],
             "problemMatcher": [],
             "group": {
@@ -24,7 +24,7 @@
             "type": "shell",
             "command": "Start-Process",
             "args": [
-                "https://bgm.tv/user/${input:bangumiTestUser}?ying-shi-test=1"
+                "https://bgm.tv/user/${input:bangumiTestUser}?shadow=1"
             ],
             "problemMatcher": [],
             "presentation": {
