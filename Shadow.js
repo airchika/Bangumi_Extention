@@ -3745,7 +3745,7 @@
                     const display_score = friend_matrix_mode_score(cell, shrinkage_mu)
                     const shrinkage_score = friend_matrix_shrinkage_score(cell, shrinkage_mu)
                     const shrinkage_title = friend_matrix_sort_mode === 'shrinkage' && shrinkage_score != null
-                        ? ` title="${escapeHtml(`原始分：${Number(cell.score).toFixed(1)}\n收缩分：${shrinkage_score.toFixed(1)}\n命中条目：${Number(cell.sampleCount || 0)}\n先验均值 μ：${shrinkage_mu.toFixed(1)}\n推荐 μ：${recommended_mu.toFixed(1)}\n先验强度 k：${get_friend_matrix_shrinkage_k()}`)}"`
+                        ? ` title="${escapeHtml(`原始分：${Number(cell.score).toFixed(1)}\n收缩分：${shrinkage_score.toFixed(1)}\n命中条目：${Number(cell.sampleCount || 0)}\n收缩中心 μ：${shrinkage_mu.toFixed(1)}\n推荐 μ：${recommended_mu.toFixed(1)}\n收缩强度 k：${get_friend_matrix_shrinkage_k()}`)}"`
                         : ''
                     return `<div class="friend-matrix-rating"${shrinkage_title}><strong class="friend-matrix-score">${display_score == null ? '—' : Math.round(display_score)}分</strong><strong class="friend-matrix-count">${Number(cell.sampleCount || 0)}条</strong></div>`
                 }
@@ -3756,7 +3756,7 @@
                 }
                 const sample_penalty = get_friend_matrix_sample_penalty()
                 const shrinkage_k = get_friend_matrix_shrinkage_k()
-                body.innerHTML = `<div class="friend-rule-toolbar"><label class="friend-matrix-rule-setting">评级规则<select id="friend-matrix-rule">${rules.map(rule => `<option value="${escapeHtml(rule.id)}" ${rule.id === selected_rule.id ? 'selected' : ''}>${escapeHtml(rule.name)}</option>`).join('')}</select></label><div class="friend-matrix-choice friend-matrix-sort-mode" role="radiogroup" aria-label="分数模式"><span>分数</span><label><input type="radio" name="friend-matrix-sort-mode" value="score" ${friend_matrix_sort_mode === 'score' ? 'checked' : ''}>原始分</label><label title="样本惩罚分 = 原始分 - 惩罚值 / √命中条目数"><input type="radio" name="friend-matrix-sort-mode" value="sample-penalty" ${friend_matrix_sort_mode === 'sample-penalty' ? 'checked' : ''}>惩罚分</label><label title="受 μ k 控制，原理：贝叶斯收缩。"><input type="radio" name="friend-matrix-sort-mode" value="shrinkage" ${friend_matrix_sort_mode === 'shrinkage' ? 'checked' : ''}>收缩分</label></div><label class="friend-matrix-penalty-setting" title="样本惩罚分 = 原始分 - 惩罚值 / √命中数。">惩罚值<input type="number" id="friend-matrix-sample-penalty" min="0" max="${MAX_FRIEND_MATRIX_SAMPLE_PENALTY}" step="1" value="${sample_penalty}"></label><label class="friend-matrix-penalty-setting" title="贝叶斯收缩的中心值，影响收缩分。右侧推荐值是当前评级规则下用户原始分的中位数。">先验均值 μ<input type="number" id="friend-matrix-shrinkage-mu" min="0" max="100" step="0.1" value="${shrinkage_mu}"><small class="friend-matrix-recommendation">推荐 ${recommended_mu.toFixed(1)}</small></label><label class="friend-matrix-penalty-setting" title="影响收缩分，k 越大越依赖 μ，k 越小越接近原始分。">先验强度 k<input type="number" id="friend-matrix-shrinkage-k" min="1" max="${MAX_FRIEND_MATRIX_SHRINKAGE_K}" step="1" value="${shrinkage_k}"></label></div><div class="friend-matrix-scroll"><table class="friend-rating-matrix"><thead><tr><th>用户</th><th aria-sort="descending">${escapeHtml(selected_rule.name)} ↓</th></tr></thead><tbody>${rows.map(({user,cell}) => `<tr><td>${user_html(user)}</td><td>${cell_html(cell)}</td></tr>`).join('')}</tbody></table></div>`
+                body.innerHTML = `<div class="friend-rule-toolbar"><label class="friend-matrix-rule-setting">评级规则<select id="friend-matrix-rule">${rules.map(rule => `<option value="${escapeHtml(rule.id)}" ${rule.id === selected_rule.id ? 'selected' : ''}>${escapeHtml(rule.name)}</option>`).join('')}</select></label><div class="friend-matrix-choice friend-matrix-sort-mode" role="radiogroup" aria-label="分数模式"><span>分数</span><label><input type="radio" name="friend-matrix-sort-mode" value="score" ${friend_matrix_sort_mode === 'score' ? 'checked' : ''}>原始分</label><label title="样本惩罚分 = 原始分 - 惩罚值 / √命中条目数"><input type="radio" name="friend-matrix-sort-mode" value="sample-penalty" ${friend_matrix_sort_mode === 'sample-penalty' ? 'checked' : ''}>惩罚分</label><label title="受 μ k 控制，原理：贝叶斯收缩。"><input type="radio" name="friend-matrix-sort-mode" value="shrinkage" ${friend_matrix_sort_mode === 'shrinkage' ? 'checked' : ''}>收缩分</label></div><label class="friend-matrix-penalty-setting" title="样本惩罚分 = 原始分 - 惩罚值 / √命中数。">惩罚值<input type="number" id="friend-matrix-sample-penalty" min="0" max="${MAX_FRIEND_MATRIX_SAMPLE_PENALTY}" step="1" value="${sample_penalty}"></label><label class="friend-matrix-penalty-setting" title="贝叶斯收缩的中心值，影响收缩分。右侧推荐值是当前评级规则下用户原始分的中位数。">收缩中心 μ<input type="number" id="friend-matrix-shrinkage-mu" min="0" max="100" step="0.1" value="${shrinkage_mu}"><small class="friend-matrix-recommendation">推荐 ${recommended_mu.toFixed(1)}</small></label><label class="friend-matrix-penalty-setting" title="影响收缩分，k 越大越依赖 μ，k 越小越接近原始分。">收缩强度 k<input type="number" id="friend-matrix-shrinkage-k" min="1" max="${MAX_FRIEND_MATRIX_SHRINKAGE_K}" step="1" value="${shrinkage_k}"></label></div><div class="friend-matrix-scroll"><table class="friend-rating-matrix"><thead><tr><th>用户</th><th aria-sort="descending">${escapeHtml(selected_rule.name)} ↓</th></tr></thead><tbody>${rows.map(({user,cell}) => `<tr><td>${user_html(user)}</td><td>${cell_html(cell)}</td></tr>`).join('')}</tbody></table></div>`
                 body.querySelector('#friend-matrix-rule').addEventListener('change', event => {
                     friend_matrix_sort_rule_id = event.target.value
                     render_friend_matrix_tab(body)
@@ -3780,7 +3780,7 @@
                 body.querySelector('#friend-matrix-shrinkage-k').addEventListener('change', event => {
                     const value = Number(event.target.value)
                     if (!event.target.value.trim() || !Number.isInteger(value) || value < 1 || value > MAX_FRIEND_MATRIX_SHRINKAGE_K) {
-                        alert(`先验强度 k 必须是 1～${MAX_FRIEND_MATRIX_SHRINKAGE_K} 之间的整数`)
+                        alert(`收缩强度 k 必须是 1～${MAX_FRIEND_MATRIX_SHRINKAGE_K} 之间的整数`)
                         event.target.value = get_friend_matrix_shrinkage_k()
                         return
                     }
@@ -3790,7 +3790,7 @@
                 body.querySelector('#friend-matrix-shrinkage-mu').addEventListener('change', event => {
                     const value = Number(event.target.value)
                     if (!event.target.value.trim() || !Number.isFinite(value) || value < 0 || value > 100) {
-                        alert('先验均值 μ 必须是 0～100 之间的数字')
+                        alert('收缩中心 μ 必须是 0～100 之间的数字')
                         event.target.value = get_friend_matrix_shrinkage_mu()
                         return
                     }
