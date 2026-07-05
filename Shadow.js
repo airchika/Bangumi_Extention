@@ -3657,7 +3657,7 @@
                 const pad = number => String(number).padStart(2, '0')
                 const exported_at = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`
                 anchor.href = url
-                anchor.download = `(${self_username}) Shadow 全缓存评级 (${exported_at}).csv`
+                anchor.download = `(${self_username}) Shadow 全缓存好友评级 (${exported_at}).csv`
                 anchor.click()
                 URL.revokeObjectURL(url)
             }
@@ -3805,7 +3805,7 @@
 
             function open_friend_rating_workbench() {
                 document.querySelector('.friend-rating-backdrop')?.remove()
-                friend_workbench = create_element(`<div class="friend-rating-backdrop"><section class="friend-rating-workbench" role="dialog" aria-modal="true"><header class="friend-rating-header"><h2 style="margin:0">好友评级工作台</h2><button type="button" data-friend-workbench-close>×</button></header><nav class="friend-rating-tabs"><button type="button" class="active" data-friend-tab="current">当前评级</button><button type="button" data-friend-tab="matrix">全缓存评级</button><button type="button" id="friend-matrix-export" title="导出当前评级规则的 CSV" aria-label="导出 CSV" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 15v5h14v-5"/></svg><span>导出 CSV</span></button></nav><div class="friend-rating-body"></div></section></div>`)
+                friend_workbench = create_element(`<div class="friend-rating-backdrop"><section class="friend-rating-workbench" role="dialog" aria-modal="true"><header class="friend-rating-header"><h2 style="margin:0">好友评级工作台</h2><button type="button" data-friend-workbench-close>×</button></header><nav class="friend-rating-tabs"><button type="button" class="active" data-friend-tab="current">当前评级</button><button type="button" data-friend-tab="matrix">全缓存好友评级</button><button type="button" id="friend-matrix-export" title="导出当前评级规则的 CSV" aria-label="导出 CSV" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 15v5h14v-5"/></svg><span>导出 CSV</span></button></nav><div class="friend-rating-body"></div></section></div>`)
                 document.body.append(friend_workbench)
                 friend_workbench.dataset.activeTab = 'current'
                 const body = friend_workbench.querySelector('.friend-rating-body')
