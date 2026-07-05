@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-本仓库收录面向 Bangumi 的 Tampermonkey/Greasemonkey 用户脚本。根目录的 `鉴定.js` 是当前主要脚本；`others/` 保存相似度分析、历史头像、曾用名和 BMO 面板等独立脚本。`idea.md` 与 `idea angle.md` 用于记录构想，`CLAUDE.md` 提供更详细的架构背景。每个 `.js` 文件应保持独立，包含完整的 `// ==UserScript==` 元数据头，并使用 IIFE 隔离作用域。不要提交生成产物或第三方依赖。
+本仓库收录面向 Bangumi 的 Tampermonkey/Greasemonkey 用户脚本。根目录的 `Shadow.js` 是当前主要脚本；`others/` 保存相似度分析、历史头像、曾用名和 BMO 面板等独立脚本。`idea.md` 与 `idea angle.md` 用于记录构想。每个 `.js` 文件应保持独立，包含完整的 `// ==UserScript==` 元数据头，并使用 IIFE 隔离作用域。不要提交生成产物或第三方依赖。
 
 ## 开发、检查与本地运行
 

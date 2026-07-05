@@ -317,6 +317,13 @@
     const FRIEND_RATING_LOCAL_KEY = '鉴定_friend_rating_rules_v1'
     const FRIEND_RATING_PENDING_KEY = '鉴定_friend_rating_rules_pending_v1'
     const FRIEND_RATING_CLOUD_KEY = 'bangumi_extension_friend_rating_rules_v1'
+    const FRIEND_MATRIX_SORT_MODE_KEY = '鉴定_friend_matrix_sort_mode_v1'
+    const FRIEND_MATRIX_SORT_MODES = new Set(['score', 'sample-penalty', 'shrinkage'])
+    const DEFAULT_FRIEND_MATRIX_SAMPLE_PENALTY = 30
+    const MAX_FRIEND_MATRIX_SAMPLE_PENALTY = 100000
+    const DEFAULT_FRIEND_MATRIX_SHRINKAGE_K = 10
+    const MAX_FRIEND_MATRIX_SHRINKAGE_K = 100000
+    const DEFAULT_FRIEND_MATRIX_SHRINKAGE_MU = 50
     const FIXED_SORT_KEYS = new Set(['important', 'discover_important', 'high_sync', 'low_sync', 'common_new', 'wanted_recommendation'])
     const CUSTOM_FACTOR_IDS = new Set([
         'my_rating', 'his_rating', 'agreement', 'my_conformity', 'his_conformity',
@@ -554,10 +561,42 @@
 
     const BUILTIN_FRIEND_RULES = create_builtin_friend_rules()
 
+    function normalize_friend_matrix_sample_penalty(value) {
+        const penalty = Number(value)
+        return Number.isFinite(penalty) && penalty >= 0 && penalty <= MAX_FRIEND_MATRIX_SAMPLE_PENALTY
+            ? penalty
+            : DEFAULT_FRIEND_MATRIX_SAMPLE_PENALTY
+    }
+
+    function normalize_friend_matrix_shrinkage_k(value) {
+        const k = Number(value)
+        return Number.isInteger(k) && k >= 1 && k <= MAX_FRIEND_MATRIX_SHRINKAGE_K
+            ? k
+            : DEFAULT_FRIEND_MATRIX_SHRINKAGE_K
+    }
+
+    function normalize_friend_matrix_shrinkage_mu(value) {
+        const mu = Number(value)
+        return Number.isFinite(mu) && mu >= 0 && mu <= 100
+            ? mu
+            : DEFAULT_FRIEND_MATRIX_SHRINKAGE_MU
+    }
+
+    function new_friend_matrix_settings() {
+        return {
+            samplePenalty: DEFAULT_FRIEND_MATRIX_SAMPLE_PENALTY,
+            shrinkageK: DEFAULT_FRIEND_MATRIX_SHRINKAGE_K,
+            shrinkageMu: DEFAULT_FRIEND_MATRIX_SHRINKAGE_MU,
+            updatedAt: 0,
+            deviceId: 'builtin',
+        }
+    }
+
     function new_friend_rating_document() {
         return {
             schemaVersion: 2,
             defaultRule: { id: 'important-all', updatedAt: 0, deviceId: 'builtin' },
+            matrixSettings: new_friend_matrix_settings(),
             rules: JSON.parse(JSON.stringify(BUILTIN_FRIEND_RULES)),
         }
     }
@@ -618,7 +657,29 @@
                 rules[id].filters.his_tiers = [...FRIEND_TIERS]
             }
         }
-        return { schemaVersion: 2, defaultRule: value.defaultRule, rules }
+        let matrixSettings = new_friend_matrix_settings()
+        if (value.matrixSettings != null) {
+            const valid_matrix_settings = typeof value.matrixSettings === 'object' && !Array.isArray(value.matrixSettings) &&
+                typeof value.matrixSettings.samplePenalty === 'number' && Number.isFinite(value.matrixSettings.samplePenalty) &&
+                value.matrixSettings.samplePenalty >= 0 && value.matrixSettings.samplePenalty <= MAX_FRIEND_MATRIX_SAMPLE_PENALTY &&
+                (value.matrixSettings.shrinkageK == null || (Number.isInteger(value.matrixSettings.shrinkageK) &&
+                    value.matrixSettings.shrinkageK >= 1 && value.matrixSettings.shrinkageK <= MAX_FRIEND_MATRIX_SHRINKAGE_K)) &&
+                (value.matrixSettings.shrinkageMu == null || (typeof value.matrixSettings.shrinkageMu === 'number' &&
+                    Number.isFinite(value.matrixSettings.shrinkageMu) && value.matrixSettings.shrinkageMu >= 0 && value.matrixSettings.shrinkageMu <= 100)) &&
+                Number.isFinite(Number(value.matrixSettings.updatedAt || 0)) && typeof value.matrixSettings.deviceId === 'string'
+            if (!valid_matrix_settings) {
+                if (strict) throw new Error('好友评级矩阵设置无效')
+            } else {
+                matrixSettings = {
+                    samplePenalty: normalize_friend_matrix_sample_penalty(value.matrixSettings.samplePenalty),
+                    shrinkageK: normalize_friend_matrix_shrinkage_k(value.matrixSettings.shrinkageK),
+                    shrinkageMu: normalize_friend_matrix_shrinkage_mu(value.matrixSettings.shrinkageMu),
+                    updatedAt: Number(value.matrixSettings.updatedAt || 0),
+                    deviceId: value.matrixSettings.deviceId,
+                }
+            }
+        }
+        return { schemaVersion: 2, defaultRule: value.defaultRule, matrixSettings, rules }
     }
 
     let friend_rating_document = parse_friend_rating_document(localStorage.getItem(FRIEND_RATING_LOCAL_KEY))
@@ -637,6 +698,51 @@
     function get_default_friend_rule() {
         const selected = friend_rating_document.rules[friend_rating_document.defaultRule.id]
         return selected || friend_rating_document.rules[FRIEND_RULE_IDS[0]]
+    }
+
+    function get_friend_matrix_sample_penalty() {
+        return normalize_friend_matrix_sample_penalty(friend_rating_document.matrixSettings?.samplePenalty)
+    }
+
+    function get_friend_matrix_shrinkage_k() {
+        return normalize_friend_matrix_shrinkage_k(friend_rating_document.matrixSettings?.shrinkageK)
+    }
+
+    function get_friend_matrix_shrinkage_mu() {
+        return normalize_friend_matrix_shrinkage_mu(friend_rating_document.matrixSettings?.shrinkageMu)
+    }
+
+    function set_friend_matrix_sample_penalty(value) {
+        friend_rating_document.matrixSettings = {
+            ...friend_rating_document.matrixSettings,
+            samplePenalty: normalize_friend_matrix_sample_penalty(value),
+            updatedAt: Date.now(),
+            deviceId: device_id,
+        }
+        persist_friend_rating_document()
+        schedule_friend_rating_sync()
+    }
+
+    function set_friend_matrix_shrinkage_k(value) {
+        friend_rating_document.matrixSettings = {
+            ...friend_rating_document.matrixSettings,
+            shrinkageK: normalize_friend_matrix_shrinkage_k(value),
+            updatedAt: Date.now(),
+            deviceId: device_id,
+        }
+        persist_friend_rating_document()
+        schedule_friend_rating_sync()
+    }
+
+    function set_friend_matrix_shrinkage_mu(value) {
+        friend_rating_document.matrixSettings = {
+            ...friend_rating_document.matrixSettings,
+            shrinkageMu: normalize_friend_matrix_shrinkage_mu(value),
+            updatedAt: Date.now(),
+            deviceId: device_id,
+        }
+        persist_friend_rating_document()
+        schedule_friend_rating_sync()
     }
 
     function refresh_friend_rating_ui() {
@@ -847,7 +953,9 @@
         }
         const defaultRule = compare_rule_version(cloud_doc.defaultRule, local_doc.defaultRule) > 0
             ? cloud_doc.defaultRule : local_doc.defaultRule
-        return { schemaVersion: 2, defaultRule, rules }
+        const matrixSettings = compare_rule_version(cloud_doc.matrixSettings, local_doc.matrixSettings) > 0
+            ? cloud_doc.matrixSettings : local_doc.matrixSettings
+        return { schemaVersion: 2, defaultRule, matrixSettings, rules }
     }
 
     async function sync_friend_rating_rules() {
@@ -2900,6 +3008,7 @@
                 }
                 .friend-rating-backdrop { position:fixed;inset:0;z-index:10045;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.48); }
                 .friend-rating-workbench { width:min(900px,96vw);max-height:92vh;overflow:hidden;display:flex;flex-direction:column;color:#333;background:#fff;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.3); }
+                .friend-rating-workbench.matrix-mode { width:min(500px,96vw); }
                 .friend-rating-header { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid #ddd; }
                 .friend-rating-tabs { display:flex;gap:6px;padding:8px 16px;border-bottom:1px solid #eee; }
                 .friend-rating-tabs button.active { color:#fff;background:#F09199;border-color:#F09199; }
@@ -2931,15 +3040,28 @@
                 .friend-metric-breakdown .smile { width:22px;height:22px;object-fit:contain;vertical-align:middle; }
                 .friend-matrix-scroll { overflow:auto; }
                 .friend-matrix-user { display:flex;align-items:center;gap:6px;min-width:120px;max-width:170px; }
+                .friend-matrix-user a { display:block;flex:0 0 auto; }
                 .friend-matrix-user img { width:28px;height:28px;border-radius:50%;object-fit:cover;flex:0 0 auto; }
                 .friend-matrix-user span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-                .friend-matrix-rating { display:flex;align-items:baseline;gap:6px;white-space:nowrap; }
-                .friend-matrix-level { display:block;min-width:58px;font-size:1.18em;font-weight:700;line-height:1.2;text-align:left;white-space:nowrap; }
-                .friend-matrix-confidence { display:inline;color:inherit;font-size:10px;white-space:nowrap; }
+                .friend-matrix-rating { display:grid;grid-template-columns:auto auto;align-items:baseline;gap:2px 8px;white-space:nowrap; }
+                .friend-matrix-score,.friend-matrix-level { display:block;min-width:40px;font-size:1.18em;font-weight:700;line-height:1.2;text-align:center;white-space:nowrap; }
+                .friend-matrix-count { display:block;min-width:30px;font-size:1.1em;font-weight:600;line-height:1.2;text-align:left;white-space:nowrap; }
+                .friend-matrix-choice { display:flex;align-items:center;gap:8px;padding:3px 7px;border:1px solid #ddd;border-radius:6px;white-space:nowrap; }
+                .friend-matrix-choice > span { font-weight:700; }
+                .friend-matrix-choice label { display:flex;align-items:center;gap:3px;cursor:pointer; }
+                .friend-matrix-choice input { min-height:auto;margin:0; }
+                #friend-matrix-export { margin-left:auto;align-items:center;gap:5px;color:inherit;white-space:nowrap;cursor:pointer; }
+                #friend-matrix-export:not([hidden]) { display:inline-flex; }
+                #friend-matrix-export svg { width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round; }
+                .friend-matrix-rule-setting { display:flex;align-items:center;gap:4px;white-space:nowrap; }
+                .friend-matrix-rule-setting select { min-height:auto;max-width:190px;padding:2px 4px; }
+                .friend-matrix-penalty-setting { display:flex;align-items:center;gap:4px;white-space:nowrap; }
+                .friend-matrix-penalty-setting input { width:62px;min-height:auto;padding:2px 4px; }
+                .friend-matrix-recommendation { color:#888;font-size:11px; }
                 html[data-theme=dark] .friend-rating-workbench { color:#ddd;background:#2c2c2c; }
-                html[data-theme=dark] .friend-rating-header,html[data-theme=dark] .friend-rating-tabs,html[data-theme=dark] .friend-result-card,html[data-theme=dark] .friend-rule-editor fieldset { border-color:#555; }
+                html[data-theme=dark] .friend-rating-header,html[data-theme=dark] .friend-rating-tabs,html[data-theme=dark] .friend-result-card,html[data-theme=dark] .friend-rule-editor fieldset,html[data-theme=dark] .friend-matrix-choice { border-color:#555; }
                 html[data-theme=dark] .friend-metric-breakdown th,html[data-theme=dark] .friend-metric-breakdown td,html[data-theme=dark] .friend-rating-matrix th,html[data-theme=dark] .friend-rating-matrix td { border-color:#555; }
-                @media (max-width:700px) { .friend-rating-backdrop{padding:0}.friend-rating-workbench{width:100%;height:100%;max-height:none;border-radius:0}.friend-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.friend-rule-editor-grid,.friend-rule-choice-grid,.friend-rule-filter-grid{grid-template-columns:1fr} }
+                @media (max-width:700px) { .friend-rating-backdrop{padding:0}.friend-rating-workbench{width:100%;height:100%;max-height:none;border-radius:0}.friend-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.friend-rule-editor-grid,.friend-rule-choice-grid,.friend-rule-filter-grid{grid-template-columns:1fr}.friend-matrix-choice{width:100%;box-sizing:border-box} }
             </style>
 
             <main class="鉴定_page">
@@ -3213,6 +3335,9 @@
             let friend_workbench = null
             let selected_friend_rule_id = friend_rating_document.defaultRule.id
             let friend_matrix_sort_rule_id = null
+            let friend_matrix_sort_mode = FRIEND_MATRIX_SORT_MODES.has(localStorage.getItem(FRIEND_MATRIX_SORT_MODE_KEY))
+                ? localStorage.getItem(FRIEND_MATRIX_SORT_MODE_KEY)
+                : 'score'
 
             function friend_rule_cache_key(rule, username, cached_only) {
                 return `${username}|${rule.id}|${rule.updatedAt}|${cached_only ? 'cached' : 'live'}|${JSON.stringify(rule.subject_ids)}`
@@ -3420,6 +3545,12 @@
             }
 
             async function render_friend_current_tab(body, selected_id = selected_friend_rule_id) {
+                friend_workbench?.querySelector('.friend-rating-workbench')?.classList.remove('matrix-mode')
+                const export_button = friend_workbench?.querySelector('#friend-matrix-export')
+                if (export_button) {
+                    export_button.hidden = true
+                    export_button.onclick = null
+                }
                 const rules = get_active_friend_rules()
                 if (!rules.some(rule => rule.id === selected_id)) selected_id = friend_rating_document.defaultRule.id
                 selected_friend_rule_id = selected_id
@@ -3491,23 +3622,33 @@
                 return `"${text.replace(/"/g, '""')}"`
             }
 
-            function export_friend_matrix_csv(rows, rules) {
-                const headers = ['用户名', '昵称', ...rules.flatMap(rule => [
-                    `${rule.name} Lv`, `${rule.name} 置信度(%)`, `${rule.name} 实际分数`, `${rule.name} 状态`,
-                ])]
-                const data_rows = rows.map(({ user, cells }) => [
-                    user.username,
-                    user.nickname || user.username,
-                    ...cells.flatMap(cell => {
-                        if (cell.status === 'ready') return [
-                            Number(cell.level),
-                            Math.round(Number(cell.confidence || 0) * 10000) / 100,
+            function export_friend_matrix_csv(rows, rule, prior) {
+                const headers = [
+                    '用户名', '昵称', `${rule.name} 原始分`, `${rule.name} 样本惩罚分`,
+                    `${rule.name} 贝叶斯收缩分`, `${rule.name} 命中条目数`, `${rule.name} 状态`,
+                ]
+                const data_rows = rows.map(({ user, cell }) => {
+                    if (cell.status === 'ready') {
+                        const penalty_score = friend_matrix_sample_penalty_score(cell)
+                        const shrinkage_score = friend_matrix_shrinkage_score(cell, prior)
+                        return [
+                            user.username,
+                            user.nickname || user.username,
                             Number(cell.score),
+                            penalty_score == null ? '' : Math.round(penalty_score),
+                            shrinkage_score == null ? '' : Math.round(shrinkage_score),
+                            Number(cell.sampleCount || 0),
                             '有效',
                         ]
-                        return ['', '', '', cell.status === 'needs-update' ? '需更新' : '待定']
-                    }),
-                ])
+                    }
+                    const sample_count = Number(cell.sampleCount)
+                    return [
+                        user.username,
+                        user.nickname || user.username,
+                        '', '', '', Number.isFinite(sample_count) ? sample_count : '',
+                        cell.status === 'needs-update' ? '需更新' : '待定',
+                    ]
+                })
                 const csv = [headers, ...data_rows].map(row => row.map(csv_cell).join(',')).join('\r\n')
                 const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
                 const url = URL.createObjectURL(blob)
@@ -3521,102 +3662,150 @@
                 URL.revokeObjectURL(url)
             }
 
+            function friend_matrix_sample_penalty_score(cell) {
+                const score = Number(cell?.score)
+                const sample_count = Number(cell?.sampleCount)
+                if (cell?.status !== 'ready' || !Number.isFinite(score) || !(sample_count > 0)) return null
+                return score - get_friend_matrix_sample_penalty() / Math.sqrt(sample_count)
+            }
+
+            function build_friend_matrix_recommended_mu(rows) {
+                const scores = rows
+                    .map(row => row.cell)
+                    .filter(cell => cell?.status === 'ready' && Number.isFinite(Number(cell.score)))
+                    .map(cell => Number(cell.score))
+                    .sort((a, b) => a - b)
+                if (!scores.length) return 50
+                const middle = Math.floor(scores.length / 2)
+                return scores.length % 2 ? scores[middle] : (scores[middle - 1] + scores[middle]) / 2
+            }
+
+            function friend_matrix_shrinkage_score(cell, prior, k = get_friend_matrix_shrinkage_k()) {
+                const score = Number(cell?.score)
+                const sample_count = Number(cell?.sampleCount)
+                if (cell?.status !== 'ready' || !Number.isFinite(score) || !(sample_count > 0)) return null
+                const prior_score = Number.isFinite(Number(prior)) ? Number(prior) : 50
+                const prior_sample = Number.isInteger(Number(k)) && Number(k) > 0
+                    ? Number(k)
+                    : DEFAULT_FRIEND_MATRIX_SHRINKAGE_K
+                return prior_score + (sample_count / (sample_count + prior_sample)) * (score - prior_score)
+            }
+
+            function friend_matrix_mode_score(cell, prior, mode = friend_matrix_sort_mode) {
+                if (mode === 'sample-penalty') return friend_matrix_sample_penalty_score(cell)
+                if (mode === 'shrinkage') return friend_matrix_shrinkage_score(cell, prior)
+                const score = Number(cell?.score)
+                return cell?.status === 'ready' && Number.isFinite(score) ? score : null
+            }
+
+            function compare_friend_matrix_rows(a, b, prior, sort_mode = friend_matrix_sort_mode) {
+                const a_sort_score = friend_matrix_mode_score(a.cell, prior, sort_mode)
+                const b_sort_score = friend_matrix_mode_score(b.cell, prior, sort_mode)
+                const a_valid = Number.isFinite(a_sort_score)
+                const b_valid = Number.isFinite(b_sort_score)
+                if (a_valid !== b_valid) return a_valid ? -1 : 1
+                if (a_valid && b_valid) {
+                    const sort_score_diff = b_sort_score - a_sort_score
+                    if (sort_score_diff) return sort_score_diff
+                    const score_diff = Number(b.cell.score) - Number(a.cell.score)
+                    if (score_diff) return score_diff
+                    const sample_count_diff = Number(b.cell.sampleCount || 0) - Number(a.cell.sampleCount || 0)
+                    if (sample_count_diff) return sample_count_diff
+                }
+                return String(a.user.nickname || a.user.username).localeCompare(String(b.user.nickname || b.user.username), 'zh-CN')
+            }
+
             async function render_friend_matrix_tab(body) {
+                friend_workbench?.querySelector('.friend-rating-workbench')?.classList.add('matrix-mode')
+                const export_button = friend_workbench?.querySelector('#friend-matrix-export')
+                if (export_button) {
+                    export_button.hidden = true
+                    export_button.onclick = null
+                }
                 body.innerHTML = '<p>正在读取本地缓存…</p>'
                 const cached_users = await api_cache.getCachedCollectionUsernames()
                 const users = (await api_cache.getAllUsers()).filter(user => user.username !== my_id && cached_users.has(user.username))
                 const rules = get_active_friend_rules()
-                const stale_users = stale_cached_users(users)
+                const selected_rule = rules.find(rule => rule.id === friend_matrix_sort_rule_id) || get_default_friend_rule()
+                friend_matrix_sort_rule_id = selected_rule.id
                 const rows = []
                 for (const user of users) {
-                    const cells = []
-                    for (const rule of rules) {
-                        try { cells.push(await calculate_friend_rule(rule, user.username, true)) }
-                        catch (error) { cells.push({ status:'pending', reason:String(error.message || error), sampleCount:0, confidence:0 }) }
-                    }
-                    rows.push({ user, cells })
+                    let cell
+                    try { cell = await calculate_friend_rule(selected_rule, user.username, true) }
+                    catch (error) { cell = { status:'pending', reason:String(error.message || error), sampleCount:0, confidence:0 } }
+                    rows.push({ user, cell })
                 }
                 if (!body.isConnected || friend_workbench?.dataset.activeTab !== 'matrix') return
-                const sort_index = rules.findIndex(rule => rule.id === friend_matrix_sort_rule_id)
-                if (sort_index >= 0) {
-                    rows.sort((a, b) => {
-                        const a_cell = a.cells[sort_index]
-                        const b_cell = b.cells[sort_index]
-                        const a_ready = a_cell?.status === 'ready' && Number.isFinite(Number(a_cell.score))
-                        const b_ready = b_cell?.status === 'ready' && Number.isFinite(Number(b_cell.score))
-                        if (a_ready !== b_ready) return a_ready ? -1 : 1
-                        if (a_ready && b_ready) {
-                            const level_diff = Number(b_cell.level) - Number(a_cell.level)
-                            if (level_diff) return level_diff
-                            const confidence_diff = Number(b_cell.confidence || 0) - Number(a_cell.confidence || 0)
-                            if (confidence_diff) return confidence_diff
-                            const score_diff = Number(b_cell.score) - Number(a_cell.score)
-                            if (score_diff) return score_diff
-                        }
-                        return String(a.user.nickname || a.user.username).localeCompare(String(b.user.nickname || b.user.username), 'zh-CN')
-                    })
-                }
+                const recommended_mu = build_friend_matrix_recommended_mu(rows)
+                const shrinkage_mu = get_friend_matrix_shrinkage_mu()
+                rows.sort((a, b) => compare_friend_matrix_rows(a, b, shrinkage_mu))
                 const cell_html = cell => {
                     if (cell.status === 'needs-update') return '<strong class="friend-matrix-level">需更新</strong>'
                     if (cell.status !== 'ready') return '<strong class="friend-matrix-level">待定</strong>'
-                    const confidence = Math.max(0, Math.min(1, Number(cell.confidence || 0)))
-                    return `<div class="friend-matrix-rating"><strong class="friend-matrix-level">Lv${cell.level}</strong>${confidence < 1 ? `<small class="friend-matrix-confidence">置信度 ${Math.round(confidence * 100)}%</small>` : ''}</div>`
+                    const display_score = friend_matrix_mode_score(cell, shrinkage_mu)
+                    const shrinkage_score = friend_matrix_shrinkage_score(cell, shrinkage_mu)
+                    const shrinkage_title = friend_matrix_sort_mode === 'shrinkage' && shrinkage_score != null
+                        ? ` title="${escapeHtml(`原始分：${Number(cell.score).toFixed(1)}\n收缩分：${shrinkage_score.toFixed(1)}\n命中条目：${Number(cell.sampleCount || 0)}\n先验均值 μ：${shrinkage_mu.toFixed(1)}\n推荐 μ：${recommended_mu.toFixed(1)}\n先验强度 k：${get_friend_matrix_shrinkage_k()}`)}"`
+                        : ''
+                    return `<div class="friend-matrix-rating"${shrinkage_title}><strong class="friend-matrix-score">${display_score == null ? '—' : Math.round(display_score)}分</strong><strong class="friend-matrix-count">${Number(cell.sampleCount || 0)}条</strong></div>`
                 }
                 const user_html = user => {
                     const avatar = user.avatar?.small || user.avatar?.medium || ''
-                    return `<div class="friend-matrix-user">${avatar ? `<img src="${escapeHtml(avatar)}" alt="">` : ''}<span>${escapeHtml(user.nickname || user.username)}</span></div>`
+                    const profile_url = `${location.origin}/user/${encodeURIComponent(user.username)}`
+                    return `<div class="friend-matrix-user">${avatar ? `<a href="${escapeHtml(profile_url)}" target="_blank" rel="noopener noreferrer" title="在新标签页打开 ${escapeHtml(user.nickname || user.username)} 的个人页"><img src="${escapeHtml(avatar)}" alt=""></a>` : ''}<span>${escapeHtml(user.nickname || user.username)}</span></div>`
                 }
-                body.innerHTML = `<div class="friend-rule-toolbar"><button type="button" id="friend-matrix-refresh">批量更新缺失缓存</button><button type="button" id="friend-matrix-refresh-stale" ${stale_users.length ? '' : 'disabled'}>更新 7 天前缓存（${stale_users.length}）</button><button type="button" id="friend-matrix-clean-stale" ${stale_users.length ? '' : 'disabled'}>清理 7 天前缓存（${stale_users.length}）</button><button type="button" id="friend-matrix-export">导出表格（CSV）</button><span id="friend-matrix-progress"></span></div><div class="friend-matrix-scroll"><table class="friend-rating-matrix"><thead><tr><th>用户</th>${rules.map(rule => `<th aria-sort="${rule.id === friend_matrix_sort_rule_id ? 'descending' : 'none'}"><button type="button" class="friend-matrix-sort${rule.id === friend_matrix_sort_rule_id ? ' active' : ''}" data-matrix-sort-rule="${escapeHtml(rule.id)}">${escapeHtml(rule.name)}${rule.id === friend_matrix_sort_rule_id ? ' ↓' : ''}</button></th>`).join('')}</tr></thead><tbody>${rows.map(({user,cells}) => `<tr><td>${user_html(user)}</td>${cells.map(cell => `<td>${cell_html(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
-                body.querySelectorAll('[data-matrix-sort-rule]').forEach(button => button.addEventListener('click', () => {
-                    friend_matrix_sort_rule_id = button.dataset.matrixSortRule
+                const sample_penalty = get_friend_matrix_sample_penalty()
+                const shrinkage_k = get_friend_matrix_shrinkage_k()
+                body.innerHTML = `<div class="friend-rule-toolbar"><label class="friend-matrix-rule-setting">评级规则<select id="friend-matrix-rule">${rules.map(rule => `<option value="${escapeHtml(rule.id)}" ${rule.id === selected_rule.id ? 'selected' : ''}>${escapeHtml(rule.name)}</option>`).join('')}</select></label><div class="friend-matrix-choice friend-matrix-sort-mode" role="radiogroup" aria-label="分数模式"><span>分数</span><label><input type="radio" name="friend-matrix-sort-mode" value="score" ${friend_matrix_sort_mode === 'score' ? 'checked' : ''}>原始分</label><label title="样本惩罚分 = 原始分 - 惩罚值 / √命中条目数"><input type="radio" name="friend-matrix-sort-mode" value="sample-penalty" ${friend_matrix_sort_mode === 'sample-penalty' ? 'checked' : ''}>惩罚分</label><label title="受 μ k 控制，原理：贝叶斯收缩。"><input type="radio" name="friend-matrix-sort-mode" value="shrinkage" ${friend_matrix_sort_mode === 'shrinkage' ? 'checked' : ''}>收缩分</label></div><label class="friend-matrix-penalty-setting" title="样本惩罚分 = 原始分 - 惩罚值 / √命中数。">惩罚值<input type="number" id="friend-matrix-sample-penalty" min="0" max="${MAX_FRIEND_MATRIX_SAMPLE_PENALTY}" step="1" value="${sample_penalty}"></label><label class="friend-matrix-penalty-setting" title="贝叶斯收缩的中心值，影响收缩分。右侧推荐值是当前评级规则下用户原始分的中位数。">先验均值 μ<input type="number" id="friend-matrix-shrinkage-mu" min="0" max="100" step="0.1" value="${shrinkage_mu}"><small class="friend-matrix-recommendation">推荐 ${recommended_mu.toFixed(1)}</small></label><label class="friend-matrix-penalty-setting" title="影响收缩分，k 越大越依赖 μ，k 越小越接近原始分。">先验强度 k<input type="number" id="friend-matrix-shrinkage-k" min="1" max="${MAX_FRIEND_MATRIX_SHRINKAGE_K}" step="1" value="${shrinkage_k}"></label></div><div class="friend-matrix-scroll"><table class="friend-rating-matrix"><thead><tr><th>用户</th><th aria-sort="descending">${escapeHtml(selected_rule.name)} ↓</th></tr></thead><tbody>${rows.map(({user,cell}) => `<tr><td>${user_html(user)}</td><td>${cell_html(cell)}</td></tr>`).join('')}</tbody></table></div>`
+                body.querySelector('#friend-matrix-rule').addEventListener('change', event => {
+                    friend_matrix_sort_rule_id = event.target.value
+                    render_friend_matrix_tab(body)
+                })
+                body.querySelectorAll('[name="friend-matrix-sort-mode"]').forEach(input => input.addEventListener('change', () => {
+                    if (!input.checked || !FRIEND_MATRIX_SORT_MODES.has(input.value)) return
+                    friend_matrix_sort_mode = input.value
+                    localStorage.setItem(FRIEND_MATRIX_SORT_MODE_KEY, friend_matrix_sort_mode)
                     render_friend_matrix_tab(body)
                 }))
-                body.querySelector('#friend-matrix-export').addEventListener('click', () => export_friend_matrix_csv(rows, rules))
-                body.querySelector('#friend-matrix-refresh').addEventListener('click', async event => {
-                    event.target.disabled = true
-                    const progress = body.querySelector('#friend-matrix-progress')
-                    const union_types = [...new Set(rules.flatMap(rule => rule.subject_ids))]
-                    await load_manager_async.get_coll(my_id, false, union_types)
-                    let cursor = 0, completed = 0
-                    const failures = []
-                    const worker = async () => {
-                        while (cursor < users.length) {
-                            const user = users[cursor++]
-                            progress.textContent = `更新 ${completed}/${users.length}：${user.nickname || user.username}`
-                            try { await load_manager_async.get_coll(user.username, false, union_types) }
-                            catch (error) { failures.push(user.username) }
-                            completed++
-                        }
+                body.querySelector('#friend-matrix-sample-penalty').addEventListener('change', event => {
+                    const value = Number(event.target.value)
+                    if (!event.target.value.trim() || !Number.isFinite(value) || value < 0 || value > MAX_FRIEND_MATRIX_SAMPLE_PENALTY) {
+                        alert(`样本惩罚值必须是 0～${MAX_FRIEND_MATRIX_SAMPLE_PENALTY} 之间的数字`)
+                        event.target.value = get_friend_matrix_sample_penalty()
+                        return
                     }
-                    await Promise.all(Array.from({ length: Math.min(3, users.length) }, worker))
-                    friend_result_cache.clear()
-                    progress.textContent = `完成 ${completed - failures.length}/${completed}${failures.length ? `，失败：${failures.join('、')}` : ''}`
-                    await render_friend_matrix_tab(body)
+                    set_friend_matrix_sample_penalty(value)
+                    render_friend_matrix_tab(body)
                 })
-                body.querySelector('#friend-matrix-refresh-stale').addEventListener('click', async event => {
-                    event.target.disabled = true
-                    const progress = body.querySelector('#friend-matrix-progress')
-                    const union_types = [...new Set(rules.flatMap(rule => rule.subject_ids))]
-                    const { completed, failures } = await refresh_cached_users(stale_users, union_types, (done, total, user) => {
-                        progress.textContent = `更新 ${done}/${total}：${user.nickname || user.username}`
-                    })
-                    progress.textContent = `完成 ${completed - failures.length}/${completed}${failures.length ? `，失败：${failures.join('、')}` : ''}`
-                    await render_friend_matrix_tab(body)
+                body.querySelector('#friend-matrix-shrinkage-k').addEventListener('change', event => {
+                    const value = Number(event.target.value)
+                    if (!event.target.value.trim() || !Number.isInteger(value) || value < 1 || value > MAX_FRIEND_MATRIX_SHRINKAGE_K) {
+                        alert(`先验强度 k 必须是 1～${MAX_FRIEND_MATRIX_SHRINKAGE_K} 之间的整数`)
+                        event.target.value = get_friend_matrix_shrinkage_k()
+                        return
+                    }
+                    set_friend_matrix_shrinkage_k(value)
+                    render_friend_matrix_tab(body)
                 })
-                body.querySelector('#friend-matrix-clean-stale').addEventListener('click', async event => {
-                    if (!confirm(`删除 ${stale_users.length} 名用户超过 7 天或时间未知的本地缓存？`)) return
-                    event.target.disabled = true
-                    const progress = body.querySelector('#friend-matrix-progress')
-                    await clear_cached_users(stale_users, (done, total, user) => {
-                        progress.textContent = `清理 ${done}/${total}：${user.nickname || user.username}`
-                    })
-                    await render_friend_matrix_tab(body)
+                body.querySelector('#friend-matrix-shrinkage-mu').addEventListener('change', event => {
+                    const value = Number(event.target.value)
+                    if (!event.target.value.trim() || !Number.isFinite(value) || value < 0 || value > 100) {
+                        alert('先验均值 μ 必须是 0～100 之间的数字')
+                        event.target.value = get_friend_matrix_shrinkage_mu()
+                        return
+                    }
+                    set_friend_matrix_shrinkage_mu(value)
+                    render_friend_matrix_tab(body)
                 })
+                if (export_button) {
+                    export_button.hidden = false
+                    export_button.onclick = () => export_friend_matrix_csv(rows, selected_rule, shrinkage_mu)
+                }
             }
 
             function open_friend_rating_workbench() {
                 document.querySelector('.friend-rating-backdrop')?.remove()
-                friend_workbench = create_element(`<div class="friend-rating-backdrop"><section class="friend-rating-workbench" role="dialog" aria-modal="true"><header class="friend-rating-header"><h2 style="margin:0">好友评级工作台</h2><button type="button" data-friend-workbench-close>×</button></header><nav class="friend-rating-tabs"><button type="button" class="active" data-friend-tab="current">当前评级</button><button type="button" data-friend-tab="matrix">全缓存评级</button></nav><div class="friend-rating-body"></div></section></div>`)
+                friend_workbench = create_element(`<div class="friend-rating-backdrop"><section class="friend-rating-workbench" role="dialog" aria-modal="true"><header class="friend-rating-header"><h2 style="margin:0">好友评级工作台</h2><button type="button" data-friend-workbench-close>×</button></header><nav class="friend-rating-tabs"><button type="button" class="active" data-friend-tab="current">当前评级</button><button type="button" data-friend-tab="matrix">全缓存评级</button><button type="button" id="friend-matrix-export" title="导出当前评级规则的 CSV" aria-label="导出 CSV" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 15v5h14v-5"/></svg><span>导出 CSV</span></button></nav><div class="friend-rating-body"></div></section></div>`)
                 document.body.append(friend_workbench)
                 friend_workbench.dataset.activeTab = 'current'
                 const body = friend_workbench.querySelector('.friend-rating-body')
@@ -3642,6 +3831,9 @@
             window.__鉴定_refresh_friend_rating = () => {
                 friend_result_cache.clear()
                 update_friend_rating_button()
+                if (friend_workbench?.dataset.activeTab === 'matrix') {
+                    render_friend_matrix_tab(friend_workbench.querySelector('.friend-rating-body'))
+                }
             }
             update_friend_rating_button()
 
@@ -4824,6 +5016,7 @@
                 friend_rating_document = {
                     schemaVersion: 2,
                     defaultRule: { id: imported.defaultRule.id, updatedAt: Date.now() + FRIEND_RULE_IDS.length, deviceId: device_id },
+                    matrixSettings: { ...imported.matrixSettings, updatedAt: Date.now() + FRIEND_RULE_IDS.length + 1, deviceId: device_id },
                     rules: Object.fromEntries(FRIEND_RULE_IDS.map(id => [id, {
                         ...imported.rules[id], updatedAt: Date.now() + offset++, deviceId: device_id,
                     }])),
@@ -4834,7 +5027,7 @@
             }
 
             async function reset_synced_configuration() {
-                if (!confirm('重置重要番剧、分类规则和四栏评分规则？本地与云端配置都会被覆盖，缓存、最近用户和档位画像会保留。')) return
+                if (!confirm('重置重要番剧、分类规则、四栏评分规则和评级矩阵设置？本地与云端配置都会被覆盖，缓存、最近用户和档位画像会保留。')) return
                 const now = Date.now()
                 let cloud_custom = { schemaVersion: 5, rules: {}, presetOverrides: {} }
                 let cloud_important = { schemaVersion: 3, subjects: {} }
@@ -4859,6 +5052,7 @@
                 friend_rating_document = new_friend_rating_document()
                 for (const id of FRIEND_RULE_IDS) friend_rating_document.rules[id] = { ...friend_rating_document.rules[id], updatedAt: now, deviceId: device_id }
                 friend_rating_document.defaultRule = { id: FRIEND_RULE_IDS[0], updatedAt: now, deviceId: device_id }
+                friend_rating_document.matrixSettings = { ...friend_rating_document.matrixSettings, updatedAt: now, deviceId: device_id }
                 custom_sort_data_error = ''
                 persist_custom_sort_document()
                 apply_preset_overrides_from_document()
