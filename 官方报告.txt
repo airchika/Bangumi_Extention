@@ -1,0 +1,433 @@
+{
+  "reportVersion": 1,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0",
+  "generatedAt": "2026-07-05T12:14:49.522Z",
+  "records": [
+    {
+      "stage": "addPanelTab:immediate",
+      "elapsedMs": 1,
+      "available": true,
+      "result": "调用成功，返回类型：undefined"
+    },
+    {
+      "stage": "immediate",
+      "elapsedMs": 1,
+      "readyState": "interactive",
+      "url": "https://bgm.tv/group/topic/465613",
+      "queryKeys": [],
+      "globals": [
+        {
+          "label": "bare chiiApp",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiApp.cloud_settings",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.get",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.update",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.save",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiLib",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiLib.ukagaka",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare ukagaka.addPanelTab",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "globalThis.chiiApp",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "chiiApp.cloud_settings",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.get",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.update",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.save",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.chiiLib",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "chiiLib.ukagaka",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "ukagaka.addPanelTab",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare GM_info",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.GM_info",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "bare unsafeWindow",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.unsafeWindow",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        }
+      ],
+      "dom": {
+        "body": true,
+        "navTabs": false,
+        "panelInterestWrapper": false,
+        "floorCount": 16,
+        "floorWithActionsCount": 16
+      },
+      "settings": {
+        "registered": true,
+        "attempts": 1
+      }
+    },
+    {
+      "stage": "250ms",
+      "elapsedMs": 268,
+      "readyState": "complete",
+      "url": "https://bgm.tv/group/topic/465613",
+      "queryKeys": [],
+      "globals": [
+        {
+          "label": "bare chiiApp",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiApp.cloud_settings",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.get",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.update",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.save",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiLib",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiLib.ukagaka",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare ukagaka.addPanelTab",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "globalThis.chiiApp",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "chiiApp.cloud_settings",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.get",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.update",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.save",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.chiiLib",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "chiiLib.ukagaka",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "ukagaka.addPanelTab",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare GM_info",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.GM_info",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "bare unsafeWindow",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.unsafeWindow",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        }
+      ],
+      "dom": {
+        "body": true,
+        "navTabs": false,
+        "panelInterestWrapper": false,
+        "floorCount": 16,
+        "floorWithActionsCount": 16
+      },
+      "settings": {
+        "registered": true,
+        "attempts": 1
+      }
+    },
+    {
+      "stage": "1000ms",
+      "elapsedMs": 1005,
+      "readyState": "complete",
+      "url": "https://bgm.tv/group/topic/465613",
+      "queryKeys": [],
+      "globals": [
+        {
+          "label": "bare chiiApp",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiApp.cloud_settings",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.get",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.update",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare cloud_settings.save",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiLib",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare chiiLib.ukagaka",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare ukagaka.addPanelTab",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "globalThis.chiiApp",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "chiiApp.cloud_settings",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.get",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.update",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "cloud_settings.save",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.chiiLib",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "chiiLib.ukagaka",
+          "ok": true,
+          "type": "object",
+          "value": "[存在]"
+        },
+        {
+          "label": "ukagaka.addPanelTab",
+          "ok": true,
+          "type": "function",
+          "value": "[存在]"
+        },
+        {
+          "label": "bare GM_info",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.GM_info",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "bare unsafeWindow",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        },
+        {
+          "label": "globalThis.unsafeWindow",
+          "ok": true,
+          "type": "undefined",
+          "value": null
+        }
+      ],
+      "dom": {
+        "body": true,
+        "navTabs": false,
+        "panelInterestWrapper": false,
+        "floorCount": 16,
+        "floorWithActionsCount": 16
+      },
+      "settings": {
+        "registered": true,
+        "attempts": 1
+      }
+    }
+  ]
+}

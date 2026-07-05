@@ -2,22 +2,45 @@
 // @name         Shadow
 // @homepage     https://bangumi.tv/dev/app/5445
 // @author       https://bangumi.tv/user/air_chika
-// @include      /^https?:\/\/(?:bgm\.tv|bangumi\.tv|chii\.in)\/(?:(?:group|subject)\/topic\/[^\/?#]+|subject\/\d+\/?(?:[?#].*)?|(?:user|ep|person|character|blog)\/[^\/?#]+(?:[\/?#].*)?)$/
+// @include      /^https?:\/\/(?:bgm\.tv|bangumi\.tv|chii\.in)\/(?:(?:group|subject)\/topic\/[^\/?#]+|(?:user|ep|person|character|blog)\/[^\/?#]+)(?:[\/?#].*)?$/
+// @include      https://bgm.tv/subject/*
+// @include      https://bangumi.tv/subject/*
+// @include      https://chii.in/subject/*
 // ==/UserScript==
 (function () {
 
     const is_user_profile_page = /^\/user\/[^/]+\/?$/.test(location.pathname)
     const is_subject_page = /^\/subject\/\d+\/?$/.test(location.pathname)
     const is_discussion_page = /^\/(?:group\/topic|subject\/topic|ep|person|character|blog)\/[^/]+/.test(location.pathname)
-    const IS_BANGUMI_COMPONENT = typeof chiiApp !== 'undefined' && typeof chiiApp.cloud_settings !== 'undefined'
     const SHADOW_POST_SHORTCUT_SETTING = 'shadow_show_post_shortcut'
+    const SHADOW_SUBJECT_IMPORTANT_SETTING = 'shadow_show_subject_important_button'
+    const SHADOW_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
     let shadow_post_shortcut_session_value = null
+    let shadow_subject_important_session_value = null
+
+    function has_bangumi_cloud_settings() {
+        try {
+            return typeof chiiApp !== 'undefined' && !!chiiApp?.cloud_settings
+        } catch (error) {
+            return false
+        }
+    }
 
     function should_show_shadow_post_shortcut() {
         if (shadow_post_shortcut_session_value != null) return shadow_post_shortcut_session_value === 'on'
         try {
             if (typeof chiiApp !== 'undefined' && chiiApp?.cloud_settings) {
                 return chiiApp.cloud_settings.get(SHADOW_POST_SHORTCUT_SETTING) !== 'off'
+            }
+        } catch (error) { /* 个性化设置不可用时默认显示 */ }
+        return true
+    }
+
+    function should_show_subject_important_button() {
+        if (shadow_subject_important_session_value != null) return shadow_subject_important_session_value === 'on'
+        try {
+            if (typeof chiiApp !== 'undefined' && chiiApp?.cloud_settings) {
+                return chiiApp.cloud_settings.get(SHADOW_SUBJECT_IMPORTANT_SETTING) !== 'off'
             }
         } catch (error) { /* 个性化设置不可用时默认显示 */ }
         return true
@@ -44,6 +67,21 @@
                                 chiiApp.cloud_settings.save()
                             }
                             window.dispatchEvent(new CustomEvent('shadow-post-shortcut-setting-change', { detail: value }))
+                        },
+                        options: [{ value: 'on', label: '开启' }, { value: 'off', label: '关闭' }],
+                    }, {
+                        title: '显示条目页“标为重要”按钮',
+                        name: SHADOW_SUBJECT_IMPORTANT_SETTING,
+                        type: 'radio',
+                        defaultValue: 'on',
+                        getCurrentValue: () => should_show_subject_important_button() ? 'on' : 'off',
+                        onChange: value => {
+                            shadow_subject_important_session_value = value
+                            if (typeof chiiApp !== 'undefined' && chiiApp?.cloud_settings) {
+                                chiiApp.cloud_settings.update({ [SHADOW_SUBJECT_IMPORTANT_SETTING]: value })
+                                chiiApp.cloud_settings.save()
+                            }
+                            window.dispatchEvent(new CustomEvent('shadow-subject-important-setting-change', { detail: value }))
                         },
                         options: [{ value: 'on', label: '开启' }, { value: 'off', label: '关闭' }],
                     }],
@@ -137,6 +175,7 @@
 
         function inject_floor_shortcut(floor) {
             if (!should_show_shadow_post_shortcut()) return
+            const is_component = has_bangumi_cloud_settings()
             const { username, nickname } = get_floor_identity(floor)
             if (!username) return
             const actions = floor.querySelector('.post_actions.re_info, .post_actions, .re_info')
@@ -144,15 +183,17 @@
             const existing_action = actions.querySelector(':scope > .shadow-post-action')
             if (existing_action) {
                 // 本地版优先接管快捷入口；官方版不得覆盖已经存在的本地入口。
-                if (IS_BANGUMI_COMPONENT || existing_action.dataset.shadowSource === 'local') return
+                const source = is_component ? 'component' : 'local'
+                if (existing_action.dataset.shadowOwner === SHADOW_INSTANCE_ID && existing_action.dataset.shadowSource === source) return
+                if (existing_action.dataset.shadowOwner !== SHADOW_INSTANCE_ID && (is_component || existing_action.dataset.shadowSource === 'local')) return
                 existing_action.remove()
             }
 
             const target = new URL(`/user/${encodeURIComponent(username)}`, location.origin)
-            target.searchParams.set(IS_BANGUMI_COMPONENT ? 'shadow' : 'shadow_test', '1')
             const action = document.createElement('div')
             action.className = 'action shadow-post-action'
-            action.dataset.shadowSource = IS_BANGUMI_COMPONENT ? 'component' : 'local'
+            action.dataset.shadowSource = is_component ? 'component' : 'local'
+            action.dataset.shadowOwner = SHADOW_INSTANCE_ID
             const link = document.createElement('button')
             link.type = 'button'
             link.className = 'shadow-post-shortcut-link'
@@ -163,6 +204,8 @@
                 event.preventDefault()
                 event.stopPropagation()
                 event.stopImmediatePropagation()
+                target.search = ''
+                target.searchParams.set(has_bangumi_cloud_settings() ? 'shadow' : 'shadow_test', '1')
                 open_shadow_tab(target.href, link)
             })
             action.append(link)
@@ -191,6 +234,7 @@
             }.shadow-post-action .shadow-post-shortcut-link:hover::after { display:block; }`
             document.head.append(style)
             inject_all_shortcuts()
+            ;[250, 1000, 3000].forEach(delay => setTimeout(() => inject_all_shortcuts(), delay))
             window.addEventListener('shadow-post-shortcut-setting-change', event => {
                 if (event.detail === 'off') document.querySelectorAll('.shadow-post-action').forEach(action => action.remove())
                 else inject_all_shortcuts()
@@ -218,6 +262,7 @@
     }
     if (!is_user_profile_page && !is_subject_page) return
 
+    const IS_BANGUMI_COMPONENT = has_bangumi_cloud_settings()
     const TITLE = IS_BANGUMI_COMPONENT ? 'Shadow' : 'Shadow(L)'
     const FEEDBACK_URL = 'https://bgm.tv/group/topic/462826'
     const subject_config = {
@@ -907,15 +952,22 @@
             style.textContent = `
                 #panelInterestWrapper h2.shadow-important-heading { display:flex;align-items:center;gap:8px; }
                 #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button {
-                    margin-left:auto;padding:3px 9px;border:1px solid rgba(196,143,0,.72);border-radius:4px;
-                    color:#8a6200;background:rgba(242,183,5,.2);font:inherit;font-size:12px;line-height:1.5;
+                    margin-left:auto;padding:3px 10px;border:1px solid rgba(127,127,127,.5);border-radius:15px;
+                    color:inherit;background:transparent;font:inherit;font-size:12px;line-height:1.5;
                     cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s,color .15s;
                 }
                 #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button:hover,
                 #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button:focus-visible {
-                    border-color:#d39b00;color:#6f4f00;background:rgba(242,183,5,.32);outline:none;
+                    border-color:rgba(127,127,127,.8);background:rgba(127,127,127,.12);outline:none;
                 }
-                html[data-theme=dark] #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button {
+                #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button.is-important {
+                    color:#8a6200;border-color:rgba(196,143,0,.72);background:rgba(242,183,5,.2);
+                }
+                #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button.is-important:hover,
+                #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button.is-important:focus-visible {
+                    border-color:#d39b00;color:#6f4f00;background:rgba(242,183,5,.32);
+                }
+                html[data-theme=dark] #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button.is-important {
                     color:#f1c94b;border-color:rgba(242,183,5,.72);background:rgba(242,183,5,.16);
                 }
                 @media (max-width:600px) {
@@ -928,13 +980,19 @@
             const button = document.querySelector('.shadow-subject-important-button')
             if (!button) return
             const marked = important_subject_ids.has(subject_id)
-            button.textContent = marked ? '取消重要' : '标记重要'
+            button.textContent = marked ? '重要' : '标为重要'
             button.title = marked ? '从重要番剧中移除' : '标记为重要番剧'
             button.setAttribute('aria-pressed', marked ? 'true' : 'false')
+            button.classList.toggle('is-important', marked)
         }
         const ensure_button = () => {
             const heading = document.querySelector('#panelInterestWrapper h2')
             if (!heading) return
+            if (!should_show_subject_important_button()) {
+                heading.querySelector('.shadow-subject-important-button')?.remove()
+                heading.classList.remove('shadow-important-heading')
+                return
+            }
             heading.classList.add('shadow-important-heading')
             let button = heading.querySelector('.shadow-subject-important-button')
             if (!button) {
@@ -950,6 +1008,7 @@
         }
 
         window.__shadow_refresh_subject_marker = ensure_button
+        window.addEventListener('shadow-subject-important-setting-change', ensure_button)
         let scheduled = false
         const observer = new MutationObserver(mutations => {
             if (!mutations.some(mutation => mutation.addedNodes.length || mutation.removedNodes.length)) return
