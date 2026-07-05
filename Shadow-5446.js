@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         Shadow
-// @homepage     https://bangumi.tv/dev/app/5445
+// @name         Shadow（5446 已停止更新）
+// @homepage     https://bangumi.tv/dev/app/5446
 // @author       https://bangumi.tv/user/air_chika
 // @include      /^https?:\/\/(?:bgm\.tv|bangumi\.tv|chii\.in)\/(?:(?:group|subject)\/topic\/[^\/?#]+|(?:user|ep|person|character|blog)\/[^\/?#]+)(?:[\/?#].*)?$/
 // ==/UserScript==
@@ -2303,6 +2303,13 @@
             <style>
                 .鉴定_page { line-height: 1.5; font-size: 16px; padding-top: 15px; }
                 .鉴定_page * { box-sizing: border-box; }
+                .shadow-migration-notice {
+                    margin-bottom:14px;padding:10px 12px;border:1px solid rgba(240,145,153,.65);border-radius:6px;
+                    color:inherit;background:rgba(240,145,153,.12);font-size:14px;line-height:1.7;
+                }
+                .shadow-migration-notice strong { color:#d95d69; }
+                .shadow-migration-notice a { color:#d95d69;font-weight:700;text-decoration:none; }
+                .shadow-migration-notice a:hover { text-decoration:underline; }
                 .analysis-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
                 .sort-area { flex: 0 0 600px; width: 600px; min-width: 0; }
                 .sort-track { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
@@ -2751,6 +2758,11 @@
             </style>
 
             <main class="鉴定_page">
+                <div class="shadow-migration-notice" role="status">
+                    <strong>Shadow 5446 已停止更新。</strong>
+                    建议前往 <a href="https://bangumi.tv/dev/app/5446" target="_blank" rel="noopener noreferrer">5446 组件页面</a>将其关闭，改用持续更新的
+                    <a href="https://bangumi.tv/dev/app/5445" target="_blank" rel="noopener noreferrer">Shadow 5445 正式版</a>。
+                </div>
                 <div class="analysis-top">
                     <div class="sort-area">
                         <div class="sort-track">
