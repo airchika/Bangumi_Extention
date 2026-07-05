@@ -9,6 +9,7 @@
     const is_user_profile_page = /^\/user\/[^/]+\/?$/.test(location.pathname)
     const is_subject_page = /^\/subject\/\d+\/?$/.test(location.pathname)
     const is_discussion_page = /^\/(?:group\/topic|subject\/topic|ep|person|character|blog)\/[^/]+/.test(location.pathname)
+    const IS_BANGUMI_COMPONENT = typeof chiiApp !== 'undefined' && typeof chiiApp.cloud_settings !== 'undefined'
     const SHADOW_POST_SHORTCUT_SETTING = 'shadow_show_post_shortcut'
     let shadow_post_shortcut_session_value = null
 
@@ -139,12 +140,19 @@
             const { username, nickname } = get_floor_identity(floor)
             if (!username) return
             const actions = floor.querySelector('.post_actions.re_info, .post_actions, .re_info')
-            if (!actions || actions.querySelector(':scope > .shadow-post-action')) return
+            if (!actions) return
+            const existing_action = actions.querySelector(':scope > .shadow-post-action')
+            if (existing_action) {
+                // 本地版优先接管快捷入口；官方版不得覆盖已经存在的本地入口。
+                if (IS_BANGUMI_COMPONENT || existing_action.dataset.shadowSource === 'local') return
+                existing_action.remove()
+            }
 
             const target = new URL(`/user/${encodeURIComponent(username)}`, location.origin)
-            target.searchParams.set('shadow', '1')
+            target.searchParams.set(IS_BANGUMI_COMPONENT ? 'shadow' : 'shadow_test', '1')
             const action = document.createElement('div')
             action.className = 'action shadow-post-action'
+            action.dataset.shadowSource = IS_BANGUMI_COMPONENT ? 'component' : 'local'
             const link = document.createElement('button')
             link.type = 'button'
             link.className = 'shadow-post-shortcut-link'
@@ -210,7 +218,6 @@
     }
     if (!is_user_profile_page && !is_subject_page) return
 
-    const IS_BANGUMI_COMPONENT = typeof chiiApp !== 'undefined' && typeof chiiApp.cloud_settings !== 'undefined'
     const TITLE = IS_BANGUMI_COMPONENT ? 'Shadow' : 'Shadow(L)'
     const FEEDBACK_URL = 'https://bgm.tv/group/topic/462826'
     const subject_config = {
@@ -5097,9 +5104,31 @@
 
         $navTabs.append($btn)
 
-        // 快捷入口：帖子楼层链接或 VS Code Task 可直接进入 Shadow
-        if (new URLSearchParams(window.location.search).get('shadow') === '1') {
+        // shadow=1 固定进入官方组件；shadow_test=1 优先进入本地版，找不到时回退官方组件。
+        const shadow_params = new URLSearchParams(window.location.search)
+        if (shadow_params.get('shadow') === '1' && IS_BANGUMI_COMPONENT) {
             $btn.click()
+        }
+        if (shadow_params.get('shadow_test') === '1') {
+            if (!IS_BANGUMI_COMPONENT) {
+                $btn.click()
+            } else {
+                let attempts = 0
+                const open_local_or_fallback = () => {
+                    const local_tab = [...document.querySelectorAll('.navTabs a')]
+                        .find(tab => tab.textContent.trim() === 'Shadow(L)')
+                    if (local_tab) {
+                        local_tab.click()
+                        return
+                    }
+                    if (attempts++ < 10) {
+                        setTimeout(open_local_or_fallback, 100)
+                        return
+                    }
+                    $btn.click()
+                }
+                setTimeout(open_local_or_fallback, 0)
+            }
         }
     }
 })()
