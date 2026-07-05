@@ -2,11 +2,12 @@
 // @name         Shadow
 // @homepage     https://bangumi.tv/dev/app/5445
 // @author       https://bangumi.tv/user/air_chika
-// @include      /^https?:\/\/(?:bgm\.tv|bangumi\.tv|chii\.in)\/(?:(?:group|subject)\/topic\/[^\/?#]+|(?:user|ep|person|character|blog)\/[^\/?#]+)(?:[\/?#].*)?$/
+// @include      /^https?:\/\/(?:bgm\.tv|bangumi\.tv|chii\.in)\/(?:(?:group|subject)\/topic\/[^\/?#]+|subject\/\d+\/?(?:[?#].*)?|(?:user|ep|person|character|blog)\/[^\/?#]+(?:[\/?#].*)?)$/
 // ==/UserScript==
 (function () {
 
     const is_user_profile_page = /^\/user\/[^/]+\/?$/.test(location.pathname)
+    const is_subject_page = /^\/subject\/\d+\/?$/.test(location.pathname)
     const is_discussion_page = /^\/(?:group\/topic|subject\/topic|ep|person|character|blog)\/[^/]+/.test(location.pathname)
     const SHADOW_POST_SHORTCUT_SETTING = 'shadow_show_post_shortcut'
     let shadow_post_shortcut_session_value = null
@@ -207,7 +208,7 @@
         init_shadow_post_shortcuts()
         return
     }
-    if (!is_user_profile_page) return
+    if (!is_user_profile_page && !is_subject_page) return
 
     const IS_BANGUMI_COMPONENT = typeof chiiApp !== 'undefined' && typeof chiiApp.cloud_settings !== 'undefined'
     const TITLE = IS_BANGUMI_COMPONENT ? 'Shadow' : 'Shadow(L)'
@@ -831,6 +832,7 @@
 
     function refresh_important_subject_ui() {
         if (typeof window.__鉴定_refresh_current_list === 'function') window.__鉴定_refresh_current_list()
+        if (typeof window.__shadow_refresh_subject_marker === 'function') window.__shadow_refresh_subject_marker()
     }
 
     async function sync_important_subjects() {
@@ -883,7 +885,86 @@
         rebuild_important_subject_ids()
         persist_important_subjects()
         schedule_important_subject_sync()
+        refresh_important_subject_ui()
         refresh_friend_rating_ui()
+    }
+
+    function init_subject_important_marker() {
+        const match = location.pathname.match(/^\/subject\/(\d+)\/?$/)
+        const subject_id = Number(match?.[1])
+        if (!Number.isInteger(subject_id) || subject_id <= 0) return
+
+        if (!document.getElementById('shadow-subject-important-style')) {
+            const style = document.createElement('style')
+            style.id = 'shadow-subject-important-style'
+            style.textContent = `
+                #panelInterestWrapper h2.shadow-important-heading { display:flex;align-items:center;gap:8px; }
+                #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button {
+                    margin-left:auto;padding:3px 9px;border:1px solid rgba(196,143,0,.72);border-radius:4px;
+                    color:#8a6200;background:rgba(242,183,5,.2);font:inherit;font-size:12px;line-height:1.5;
+                    cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s,color .15s;
+                }
+                #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button:hover,
+                #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button:focus-visible {
+                    border-color:#d39b00;color:#6f4f00;background:rgba(242,183,5,.32);outline:none;
+                }
+                html[data-theme=dark] #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button {
+                    color:#f1c94b;border-color:rgba(242,183,5,.72);background:rgba(242,183,5,.16);
+                }
+                @media (max-width:600px) {
+                    #panelInterestWrapper h2.shadow-important-heading .shadow-subject-important-button { padding:2px 7px;font-size:11px; }
+                }`
+            document.head.append(style)
+        }
+
+        const update_button = () => {
+            const button = document.querySelector('.shadow-subject-important-button')
+            if (!button) return
+            const marked = important_subject_ids.has(subject_id)
+            button.textContent = marked ? '取消重要' : '标记重要'
+            button.title = marked ? '从重要番剧中移除' : '标记为重要番剧'
+            button.setAttribute('aria-pressed', marked ? 'true' : 'false')
+        }
+        const ensure_button = () => {
+            const heading = document.querySelector('#panelInterestWrapper h2')
+            if (!heading) return
+            heading.classList.add('shadow-important-heading')
+            let button = heading.querySelector('.shadow-subject-important-button')
+            if (!button) {
+                button = document.createElement('button')
+                button.type = 'button'
+                button.className = 'shadow-subject-important-button'
+                button.addEventListener('click', () => {
+                    set_important_subject_marked(subject_id, !important_subject_ids.has(subject_id))
+                })
+                heading.append(button)
+            }
+            update_button()
+        }
+
+        window.__shadow_refresh_subject_marker = ensure_button
+        let scheduled = false
+        const observer = new MutationObserver(mutations => {
+            if (!mutations.some(mutation => mutation.addedNodes.length || mutation.removedNodes.length)) return
+            if (scheduled) return
+            scheduled = true
+            requestAnimationFrame(() => {
+                scheduled = false
+                ensure_button()
+            })
+        })
+        const start = () => {
+            ensure_button()
+            observer.observe(document.body, { childList: true, subtree: true })
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true })
+        else start()
+    }
+
+    if (is_subject_page) {
+        init_subject_important_marker()
+        sync_important_subjects()
+        return
     }
 
     function merge_custom_sort_documents(local_doc, cloud_doc) {
@@ -1419,7 +1500,25 @@
             return subject
         }
 
-        return { get_coll, get_cached_coll, get_user, get_subject }
+        async function search_subjects(keyword, subject_ids) {
+            const response = await fetchWithTimeout('https://api.bgm.tv/v0/search/subjects?limit=10&offset=0', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    keyword,
+                    sort: 'match',
+                    filter: { type: normalize_subject_ids(subject_ids) },
+                }),
+            }, 10000)
+            let page = null
+            try { page = await response.json() }
+            catch (error) { throw new Error(`条目搜索响应不是有效 JSON（HTTP ${response.status}）`) }
+            if (!response.ok) throw new Error(page?.description || page?.message || `条目搜索 HTTP ${response.status}`)
+            if (!Array.isArray(page?.data)) throw new Error('条目搜索响应格式无效')
+            return page.data.slice(0, 10)
+        }
+
+        return { get_coll, get_cached_coll, get_user, get_subject, search_subjects }
     })()
 
     // ─── 评分统计 ───
@@ -2299,6 +2398,10 @@
 
             // 完整页面
             const initial_rule_evaluation = getEvaluatedRule(analyze_config.current_sort)
+            let subject_search_results = []
+            let subject_search_request_id = 0
+            let subject_search_status = ''
+            let subject_search_status_kind = ''
             const page_html = `
             <style>
                 .鉴定_page { line-height: 1.5; font-size: 16px; padding-top: 15px; }
@@ -2448,6 +2551,29 @@
                 }
                 .鉴定_page ._compact_detail_action:hover, .鉴定_page ._compact_my_comment_toggle:hover { border-color:#F09199;color:#F09199;background:rgba(240,145,153,0.08); }
                 .鉴定_page ._compact_detail_action.__important { border-color:rgba(242,183,5,0.65);background:rgba(242,183,5,0.2); }
+                .subject-search-panel { margin:0 0 14px;padding:10px;border:1px solid rgba(127,127,127,.32);border-radius:7px;background:rgba(127,127,127,.04); }
+                .subject-search-form { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px; }
+                .subject-search-form input { min-width:0;padding:6px 8px;border:1px solid #bbb;border-radius:4px;color:inherit;background:transparent; }
+                .subject-search-form button,.subject-search-important {
+                    padding:5px 10px;border:1px solid #bbb;border-radius:4px;color:inherit;background:transparent;cursor:pointer;
+                }
+                .subject-search-status { display:block;min-height:1.5em;margin-top:5px;color:#888;font-size:12px; }
+                .subject-search-status[data-kind="error"] { color:#c33; }
+                .subject-search-status[data-kind="fallback"] { color:#a06d00; }
+                .subject-search-results { display:grid;gap:6px;margin-top:5px; }
+                .subject-search-result { display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:9px;padding:6px;border-radius:5px;background:rgba(127,127,127,.07); }
+                .subject-search-result > img { width:44px;height:56px;border-radius:3px;object-fit:cover;background:rgba(127,127,127,.15); }
+                .subject-search-result-main { min-width:0; }
+                .subject-search-result-main a { display:block;overflow:hidden;color:inherit;font-weight:700;text-overflow:ellipsis;white-space:nowrap; }
+                .subject-search-result-main small { color:#888; }
+                .subject-search-important { border-color:rgba(196,143,0,.72);color:#8a6200;background:rgba(242,183,5,.2);white-space:nowrap; }
+                .subject-search-important:hover { background:rgba(242,183,5,.32); }
+                html[data-theme=dark] .subject-search-important { color:#f1c94b;border-color:rgba(242,183,5,.72);background:rgba(242,183,5,.16); }
+                @media (max-width:600px) {
+                    .subject-search-result { grid-template-columns:38px minmax(0,1fr); }
+                    .subject-search-result > img { width:38px;height:50px;grid-row:1/3; }
+                    .subject-search-important { grid-column:2;justify-self:start; }
+                }
                 .鉴定_page ._compact_detail_comment { margin-top: 8px; white-space: pre-wrap; }
                 .鉴定_page ._compact_my_comment_block { margin-top: 8px; }
                 .鉴定_page ._compact_my_comment_block.is-collapsed ._compact_my_comment { display: none; }
@@ -2718,7 +2844,7 @@
                 .friend-result-card.active { border-color:#F09199;box-shadow:0 0 0 1px #F09199 inset; }
                 .friend-result-level { display:flex;align-items:center;gap:7px;margin-top:7px;font-size:18px;font-weight:700; }
                 .friend-result-level .smile,.friend-rating-toggle-emo .smile { width:24px;height:24px;object-fit:contain; }
-                .friend-rating-toggle-confidence { font-weight:600;color:inherit;line-height:1; }
+                .friend-rating-toggle-confidence { font-weight:600;color:inherit;line-height:1; font-size: 0.8em;}
                 .friend-rule-toolbar { display:flex;flex-wrap:wrap;gap:6px;margin:8px 0; }
                 .friend-rule-editor-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
                 .friend-rule-editor-grid > label { display:grid;gap:4px; }
@@ -2850,6 +2976,14 @@
                     </div>
                 </div>
                 <div id="sort-description" style="color:inherit;font-size:0.9em;margin-bottom:12px;line-height:1.6"></div>
+                <section id="subject-search-panel" class="subject-search-panel" ${analyze_config.current_sort === 'discover_important' ? '' : 'hidden'}>
+                    <form id="subject-search-form" class="subject-search-form">
+                        <input id="subject-search-input" type="search" placeholder="输入条目 ID、链接或名称" autocomplete="off" aria-label="搜索条目">
+                        <button type="submit">搜索</button>
+                    </form>
+                    <small id="subject-search-status" class="subject-search-status" aria-live="polite"></small>
+                    <div id="subject-search-results" class="subject-search-results"></div>
+                </section>
                 <div id="sort-list-container" class="is-compact" style="display:grid;grid-template-columns:repeat(auto-fill,120px);gap:25px 10px">
                     ${render_rule_result(initial_rule_evaluation)}
                 </div>
@@ -2864,6 +2998,147 @@
             $page.innerHTML = page_html
 
             renderBmoji()
+
+            function parse_subject_search_id(value) {
+                const text = String(value || '').trim()
+                if (/^\d+$/.test(text)) return Number(text)
+                try {
+                    const url = new URL(text, location.origin)
+                    if (!['bgm.tv', 'bangumi.tv', 'chii.in'].includes(url.hostname)) return null
+                    const match = url.pathname.match(/^\/subject\/(\d+)\/?$/)
+                    return match ? Number(match[1]) : null
+                } catch (error) {
+                    return null
+                }
+            }
+
+            function normalize_subject_search_text(value) {
+                return String(value || '').normalize('NFKC').toLocaleLowerCase('zh-CN').replace(/\s+/g, '')
+            }
+
+            function normalize_search_subject(subject, collection = null) {
+                const id = Number(subject?.id || collection?.subject_id)
+                if (!Number.isInteger(id) || id <= 0) return null
+                return {
+                    ...subject,
+                    id,
+                    type: Number(subject?.type || collection?.subject_type || 0),
+                }
+            }
+
+            function set_subject_search_status(message, kind = '') {
+                subject_search_status = message
+                subject_search_status_kind = kind
+                const status = document.getElementById('subject-search-status')
+                if (!status) return
+                status.textContent = message
+                status.dataset.kind = kind
+            }
+
+            function render_subject_search_results() {
+                const host = document.getElementById('subject-search-results')
+                if (!host) return
+                host.innerHTML = subject_search_results.map(subject => {
+                    const id = Number(subject.id)
+                    const name = escapeHtml(getSubjectDisplayName(subject))
+                    const original_name = subject.name && subject.name !== subject.name_cn ? ` / ${escapeHtml(subject.name)}` : ''
+                    const type_label = subject_config[Number(subject.type)]?.name || '未知类型'
+                    const image = escapeHtml(subject.images?.grid || subject.images?.medium || subject.image || '')
+                    const marked = important_subject_ids.has(id)
+                    return `<article class="subject-search-result" data-subject-id="${id}">
+                        ${image ? `<img src="${image}" alt="" loading="lazy">` : '<span></span>'}
+                        <div class="subject-search-result-main">
+                            <a href="/subject/${id}" target="_blank" rel="noopener">${name}${original_name}</a>
+                            <small>ID ${id} · ${escapeHtml(type_label)}</small>
+                        </div>
+                        <button type="button" class="subject-search-important" data-search-important="${id}" aria-pressed="${marked}">${marked ? '取消重要' : '标记重要'}</button>
+                    </article>`
+                }).join('')
+                if (subject_search_status) set_subject_search_status(subject_search_status, subject_search_status_kind)
+            }
+
+            function update_subject_search_visibility() {
+                const panel = document.getElementById('subject-search-panel')
+                if (panel) panel.hidden = analyze_config.current_sort !== 'discover_important'
+            }
+
+            async function search_cached_subjects(keyword) {
+                const cached = await load_manager_async.get_cached_coll(my_id, analyze_config.subject_ids)
+                const needle = normalize_subject_search_text(keyword)
+                const seen = new Set()
+                const matches = []
+                for (const collection of cached.collections) {
+                    const subject = normalize_search_subject(collection.subject, collection)
+                    if (!subject || seen.has(subject.id)) continue
+                    const names = [subject.name_cn, subject.name].map(normalize_subject_search_text).filter(Boolean)
+                    if (!names.some(name => name.includes(needle))) continue
+                    seen.add(subject.id)
+                    const starts = names.some(name => name.startsWith(needle))
+                    matches.push({ subject, starts })
+                }
+                matches.sort((a, b) => Number(b.starts) - Number(a.starts) || Number(b.subject.collection_total || 0) - Number(a.subject.collection_total || 0))
+                return {
+                    subjects: matches.slice(0, 10).map(item => item.subject),
+                    missingSubjectIds: cached.missingSubjectIds,
+                }
+            }
+
+            async function run_subject_search(value) {
+                const query = String(value || '').trim()
+                const request_id = ++subject_search_request_id
+                if (!query) {
+                    subject_search_results = []
+                    set_subject_search_status('请输入条目 ID、链接或名称', 'error')
+                    render_subject_search_results()
+                    return
+                }
+                subject_search_results = []
+                set_subject_search_status('正在搜索…')
+                render_subject_search_results()
+                const exact_id = parse_subject_search_id(query)
+                try {
+                    if (exact_id != null) {
+                        if (!Number.isInteger(exact_id) || exact_id <= 0) throw new Error('条目 ID 无效')
+                        const subject = normalize_search_subject(await load_manager_async.get_subject(exact_id))
+                        if (!subject) throw new Error('条目数据格式无效')
+                        if (request_id !== subject_search_request_id) return
+                        subject_search_results = [subject]
+                        set_subject_search_status(`已精确找到条目 ${exact_id}`)
+                    } else {
+                        try {
+                            subject_search_results = (await load_manager_async.search_subjects(query, analyze_config.subject_ids))
+                                .map(subject => normalize_search_subject(subject)).filter(Boolean)
+                            if (request_id !== subject_search_request_id) return
+                            set_subject_search_status(subject_search_results.length ? `找到 ${subject_search_results.length} 条匹配结果` : '没有找到匹配条目')
+                        } catch (api_error) {
+                            if (request_id !== subject_search_request_id) return
+                            const fallback = await search_cached_subjects(query)
+                            if (request_id !== subject_search_request_id) return
+                            subject_search_results = fallback.subjects
+                            const missing = fallback.missingSubjectIds.map(id => subject_config[id]?.name || id).join('、')
+                            const suffix = missing ? `；缺少${missing}收藏缓存` : ''
+                            set_subject_search_status(`在线搜索失败，已改用自己的收藏缓存，找到 ${fallback.subjects.length} 条${suffix}`, 'fallback')
+                        }
+                    }
+                } catch (error) {
+                    if (request_id !== subject_search_request_id) return
+                    subject_search_results = []
+                    set_subject_search_status(`搜索失败：${error.message || error}`, 'error')
+                }
+                render_subject_search_results()
+            }
+
+            document.getElementById('subject-search-form').addEventListener('submit', event => {
+                event.preventDefault()
+                run_subject_search(document.getElementById('subject-search-input').value)
+            })
+            document.getElementById('subject-search-results').addEventListener('click', event => {
+                const button = event.target.closest('[data-search-important]')
+                if (!button) return
+                const subject_id = Number(button.dataset.searchImportant)
+                set_important_subject_marked(subject_id, !important_subject_ids.has(subject_id))
+                render_subject_search_results()
+            })
 
             const FRIEND_METRIC_LABELS = {
                 cosine: '隐藏分余弦', variance: '原始分方差', confidence: '置信度',
@@ -2926,9 +3201,9 @@
             }
 
             function friend_confidence_percent_html(evaluation) {
-                const confidence = Number(evaluation?.confidence || 0)
-                return confidence > 0 && confidence < 1
-                    ? `<span class="friend-rating-toggle-confidence">${Math.round(confidence * 100)}%</span>`
+                const sample_count = Number(evaluation?.sampleCount || 0)
+                return evaluation?.status === 'ready' && sample_count > 0
+                    ? `<span class="friend-rating-toggle-confidence">${sample_count}条</span>`
                     : ''
             }
 
@@ -3507,7 +3782,6 @@
                 function handle_subject_card_action(action, subject_id, subject_url) {
                     if (action === 'important') {
                         set_important_subject_marked(subject_id, !important_subject_ids.has(subject_id))
-                        refreshList()
                     }
                     if (action === 'open') open_subject_link(subject_url)
                 }
@@ -3617,6 +3891,7 @@
                 container.innerHTML = render_rule_result(evaluation)
                 bind_compact_card_interactions()
                 updateDescription()
+                update_subject_search_visibility()
             }
 
             function open_custom_sort_editor_legacy(source_rule = null, copy_mode = false, edit_preset_key = null) {
