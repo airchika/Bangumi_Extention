@@ -156,7 +156,8 @@
     saveComboState(true);
     resetState();
     focusComboTab();
-    renderLoading('加载全修动态中…');
+    //加载全修动态中…
+    renderLoading(' ');
 
     try {
       await loadNextBatch();
