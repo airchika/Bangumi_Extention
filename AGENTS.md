@@ -9,7 +9,7 @@
 项目没有构建步骤或包管理器。常用检查命令如下：
 
 ```powershell
-node --check "鉴定.js"          # 检查 JavaScript 语法
+node --check "Shadow.js"          # 检查 JavaScript 语法
 node --check "others/emo.js"   # 检查指定脚本
 git diff --check               # 查找空白字符错误
 rg "@match|@include" -g "*.js" # 核对脚本生效域名
@@ -32,3 +32,5 @@ rg "@match|@include" -g "*.js" # 核对脚本生效域名
 ## 安全与配置
 
 不要提交访问令牌、Cookie、个人缓存或真实用户数据。尽量使用最小化的 `@match`、`@include` 和 `@grant` 权限；新增外部 API 时记录用途，并避免把敏感响应写入日志。
+
+Bangumi api 项目网址：[bangumi.github.io/api](https://bangumi.github.io/api/)
