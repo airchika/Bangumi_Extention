@@ -1,5 +1,7 @@
 // ==UserScript==
-// @name         角色速查
+// @name         角色替身
+// @homepage     https://bgm.tv/dev/app/5454
+// @author       https://bgm.tv/user/air_chika
 // @match        *://bgm.tv/subject/*
 // @match        *://bangumi.tv/subject/*
 // @match        *://chii.in/subject/*
@@ -14,12 +16,13 @@
     const DB_NAME = 'bangumi_va_role_lookup_v1'
     const STORE_NAME = 'store'
     const CACHE_TTL = 12 * 60 * 60 * 1000
-    const SUBJECT_TYPES = [2, 4]
+    const SUBJECT_TYPES = [1, 2, 4]
+    const ROLE_SUBJECT_TYPES = [2, 4]
     const REFRESH_CONFIG_KEY = 'va_role_lookup_refresh_cache'
     const IMPORTANT_ROLES_CONFIG_KEY = 'va_role_lookup_important_roles_v1'
     const IMPORTANT_ROLES_LOCAL_KEY = 'bangumi_va_role_lookup_important_roles_v1'
     const NO_IMAGE = 'https://bgm.tv/img/info_only.png'
-    const PRODUCTION_GROUPS = [{
+    const ANIME_PRODUCTION_GROUPS = [{
         id: 'animation',
         label: '动画制作',
         keywords: ['动画制作', 'アニメーション制作', 'アニメ制作'],
@@ -45,8 +48,23 @@
         label: '演出',
         keywords: ['演出'],
     }]
+    const GAME_PRODUCTION_GROUPS = [{
+        id: 'developer',
+        label: '开发',
+        keywords: ['开发', '開發', '开发商', '开发公司', '開発', 'Developer', 'developer', 'development'],
+    }]
+    const BOOK_PRODUCTION_GROUPS = [{
+        id: 'author',
+        label: '作者',
+        keywords: ['作者', '著者'],
+    }, {
+        id: 'illustration',
+        label: '插图',
+        keywords: ['插图', '插圖', '插画', '插畫', 'イラスト'],
+    }]
     const state = {
         subject_id: Number(location.pathname.match(/^\/subject\/(\d+)/)?.[1] || 0),
+        subject_type: 0,
         mode: 'voice',
         collection_promise: null,
         collection_loaded_at: 0,
@@ -393,6 +411,17 @@
         return persons
     }
 
+    async function get_subject(subject_id, force = false) {
+        const key = `subject:${subject_id}`
+        let subject = force ? null : await cache.get(key)
+        if (!subject) {
+            subject = await fetch_json(`https://api.bgm.tv/v0/subjects/${subject_id}`)
+            if (!subject || Number(subject.id) !== Number(subject_id)) throw new Error('条目响应格式无效')
+            await cache.set(key, subject)
+        }
+        return subject
+    }
+
     async function get_subject_persons(subject_id, force = false) {
         const key = `subject-persons:${subject_id}`
         let persons = force ? null : await cache.get(key)
@@ -418,9 +447,11 @@
     function collection_label(collection) {
         const type = Number(collection?.type)
         const subject_type = Number(collection?.subject_type)
+        const book = { 1: '想读', 2: '读过', 3: '在读', 4: '搁置', 5: '抛弃' }
         const anime = { 1: '想看', 2: '看过', 3: '在看', 4: '搁置', 5: '抛弃' }
         const game = { 1: '想玩', 2: '玩过', 3: '在玩', 4: '搁置', 5: '抛弃' }
-        return (subject_type === 4 ? game : anime)[type] || '已收藏'
+        const labels = subject_type === 1 ? book : subject_type === 4 ? game : anime
+        return labels[type] || '已收藏'
     }
 
     function collection_order(collection) {
@@ -437,9 +468,15 @@
         return group.keywords.some(keyword => values.includes(keyword))
     }
 
+    function production_groups_for_subject_type(subject_type = state.subject_type) {
+        if (Number(subject_type) === 1) return BOOK_PRODUCTION_GROUPS
+        if (Number(subject_type) === 4) return GAME_PRODUCTION_GROUPS
+        return ANIME_PRODUCTION_GROUPS
+    }
+
     function production_labels_for_relation(relation) {
         const labels = []
-        for (const group of PRODUCTION_GROUPS) {
+        for (const group of production_groups_for_subject_type()) {
             if (relation_matches(relation, group)) labels.push(group.label)
         }
         return labels
@@ -481,7 +518,7 @@
         for (const role of characters) {
             const subject_id = Number(role.subject_id)
             const subject_type = Number(role.subject_type)
-            if (!SUBJECT_TYPES.includes(subject_type) || !collection_index.has(subject_id)) continue
+            if (!ROLE_SUBJECT_TYPES.includes(subject_type) || !collection_index.has(subject_id)) continue
             candidates.push(normalize_role(role, collection_index.get(subject_id), actor))
         }
         candidates.sort((a, b) => {
@@ -626,6 +663,16 @@
             || document.querySelector('#browserItemList')?.closest('.subject_section')
     }
 
+    function find_subject_panel_host() {
+        return find_character_section()
+            || document.querySelector('#panelInterestWrapper')?.closest('.subject_section')
+            || document.querySelector('#columnSubjectHomeB .subject_section')
+            || document.querySelector('#columnSubjectHomeB')
+            || document.querySelector('#columnSubjectHomeA')
+            || document.querySelector('#main')
+            || document.body
+    }
+
     function read_actors(section) {
         const actors = []
         const characters = []
@@ -767,7 +814,7 @@
         if (state.production_people_promise && !force) return state.production_people_promise
         state.production_people_promise = (async () => {
             const persons = await get_subject_persons(state.subject_id, force)
-            const grouped = PRODUCTION_GROUPS.map(group => ({ ...group, people: [] }))
+            const grouped = production_groups_for_subject_type().map(group => ({ ...group, people: [] }))
             const seen = new Set()
 
             for (const person of persons) {
@@ -896,8 +943,9 @@
             }
         }
         const ordered_groups = [...groups.entries()].sort((a, b) => {
-            const a_index = PRODUCTION_GROUPS.findIndex(group => group.label === a[0])
-            const b_index = PRODUCTION_GROUPS.findIndex(group => group.label === b[0])
+            const production_groups = production_groups_for_subject_type()
+            const a_index = production_groups.findIndex(group => group.label === a[0])
+            const b_index = production_groups.findIndex(group => group.label === b[0])
             return (a_index < 0 ? 99 : a_index) - (b_index < 0 ? 99 : b_index)
         })
         for (const [staff, items] of ordered_groups) {
@@ -1050,7 +1098,7 @@
         const left = panel.querySelector('.va-role-lookup-left')
         left.classList.add('va-role-lookup-production-left')
         left.innerHTML = '<div class="va-role-lookup-loading">加载中...</div>'
-        set_status('正在加载动画制作人员')
+        set_status('正在加载制作人员')
         try {
             const groups = await load_production_people(force)
             left.textContent = ''
@@ -1069,18 +1117,24 @@
                 }
             }
             set_status('')
-            if (first_person) select_production_person(panel, first_person)
+            if (first_person) {
+                select_production_person(panel, first_person)
+            } else {
+                left.append(create_element('<div class="va-role-lookup-production-empty">无匹配制作人员</div>'))
+                panel.querySelector('.va-role-lookup-result').innerHTML = '<div class="va-role-lookup-empty">没有找到可查询的制作人员。</div>'
+            }
         } catch (error) {
             left.textContent = ''
             const error_box = create_element('<div class="va-role-lookup-error"><p></p><button type="button">重试</button></div>')
             error_box.querySelector('p').textContent = error.message || String(error)
             error_box.querySelector('button').addEventListener('click', () => render_production_left(panel, true))
             left.append(error_box)
-            set_status('动画制作人员加载失败')
+            set_status('制作人员加载失败')
         }
     }
 
     function set_mode(panel, characters, mode) {
+        if (mode === 'voice' && !characters.length) mode = 'production'
         state.mode = mode
         panel.classList.toggle('is-production-mode', mode === 'production')
         panel.closest('.va-role-lookup-host')?.querySelectorAll('.va-role-lookup-mode').forEach(button => {
@@ -1099,10 +1153,10 @@
     async function refresh_cache(force_status = true) {
         const username = get_username()
         if (!username) {
-            set_status('需要登录后才能刷新角色速查缓存')
+            set_status('需要登录后才能刷新角色替身缓存')
             return
         }
-        if (force_status) set_status('正在刷新角色速查缓存...')
+        if (force_status) set_status('正在刷新角色替身缓存...')
         state.collection_promise = null
         state.collection_loaded_at = 0
         state.collection_index = null
@@ -1120,7 +1174,7 @@
         await cache.delete_prefix('character-persons:')
         await cache.delete_prefix('subject-persons:')
         await cache.delete_prefix('person-subjects:')
-        if (force_status) set_status('角色速查缓存已刷新')
+        if (force_status) set_status('角色替身缓存已刷新')
     }
 
     function clear_actor_role_names(actor_id) {
@@ -1142,7 +1196,7 @@
         const try_register = () => {
             if (typeof chiiLib !== 'undefined' && chiiLib?.ukagaka?.addGeneralConfig) {
                 chiiLib.ukagaka.addGeneralConfig({
-                    title: '角色速查缓存',
+                    title: '角色替身缓存',
                     name: REFRESH_CONFIG_KEY,
                     type: 'radio',
                     defaultValue: 'idle',
@@ -1151,7 +1205,7 @@
                         state.refresh_value = value
                         if (value !== 'refresh') return
                         refresh_cache().catch(error => {
-                            set_status(`角色速查缓存刷新失败：${error.message || error}`)
+                            set_status(`角色替身缓存刷新失败：${error.message || error}`)
                         }).finally(() => {
                             state.refresh_value = 'idle'
                             try {
@@ -1241,17 +1295,18 @@
     function install_panel(section, characters) {
         if (section.dataset.vaRoleLookupInstalled === '1') return
         section.dataset.vaRoleLookupInstalled = '1'
+        const has_voice_mode = !!characters.length && state.subject_type !== 1
 
         const host = create_element('<div class="va-role-lookup-host"></div>')
         const toolbar = create_element(`
             <div class="va-role-lookup-toolbar">
-                <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="voice" aria-expanded="false">角色速查</button>
-                <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="production" aria-expanded="false">制作速查</button>
+                ${has_voice_mode ? '<button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="voice" aria-expanded="false">角色替身</button>' : ''}
+                <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="production" aria-expanded="false">制作替身</button>
                 <span class="va-role-lookup-status"></span>
             </div>
         `)
         const panel = create_element(`
-            <div class="va-role-lookup-panel" aria-label="角色速查面板">
+            <div class="va-role-lookup-panel" aria-label="角色替身面板">
                 <div class="va-role-lookup-left"></div>
                 <div class="va-role-lookup-right">
                     <div class="va-role-lookup-result"><div class="va-role-lookup-hint">点击左侧角色后开始加载。</div></div>
@@ -1259,7 +1314,7 @@
             </div>
         `)
 
-        render_voice_left(panel, characters)
+        if (has_voice_mode) render_voice_left(panel, characters)
         state.current_panel = panel
 
         toolbar.querySelectorAll('.va-role-lookup-mode').forEach(button => {
@@ -1278,15 +1333,29 @@
         const more = section.querySelector(':scope > a.more')
         host.append(toolbar, panel)
         if (more) more.before(host)
+        else if (section === document.body) document.body.prepend(host)
         else section.append(host)
         set_status(state.status_text)
     }
 
-    function init() {
-        const section = find_character_section()
+    async function init() {
+        try {
+            const subject = await get_subject(state.subject_id)
+            state.subject_type = Number(subject.type)
+        } catch (error) {
+            state.subject_type = 0
+        }
+        const character_section = find_character_section()
+        const section = character_section || find_subject_panel_host()
         if (!section) return
-        const { actors, characters, current_character_actors } = read_actors(section)
-        if (!actors.length || !characters.length) return
+        const { actors, characters, current_character_actors } = character_section
+            ? read_actors(character_section)
+            : { actors: [], characters: [], current_character_actors: new Map() }
+        if (state.subject_type === 1) {
+            actors.length = 0
+            characters.length = 0
+        }
+        if (!characters.length && ![1, 4].includes(state.subject_type)) return
         for (const actor of actors) state.actor_by_id.set(actor.id, actor)
         state.current_character_actors = current_character_actors
         seed_current_character_actor_names(current_character_actors)
@@ -1295,5 +1364,7 @@
         register_settings()
     }
 
-    init()
+    init().catch(error => {
+        console.error('[角色替身] 初始化失败', error)
+    })
 })()
