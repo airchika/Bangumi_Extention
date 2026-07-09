@@ -1070,7 +1070,7 @@
                 const section = document.createElement('section')
                 section.className = 'va-role-lookup-result-section'
                 const title = document.createElement('h3')
-                title.className = 'va-role-lookup-result-title'
+                title.className = 'va-role-lookup-result-title va-role-lookup-actor-title'
                 title.textContent = actor.name
                 const content = document.createElement('div')
                 content.className = 'va-role-lookup-section-content'
@@ -1301,6 +1301,7 @@
             .va-role-lookup-result-section { margin-bottom:14px; }
             .va-role-lookup-result-section:last-child { margin-bottom:0; }
             .va-role-lookup-result-title { margin:0 0 8px; padding-bottom:4px; border-bottom:1px solid rgba(127,127,127,.24); color:#555; font-size:13px; line-height:1.3; }
+            .va-role-lookup-actor-title { display:inline-block; max-width:100%; box-sizing:border-box; padding:6px 12px; border:0; border-radius:999px; background:rgba(255,128,160,.14); color:#c45; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             .va-role-lookup-role-group { margin:0 0 12px; }
             .va-role-lookup-role-group:last-child { margin-bottom:0; }
             .va-role-lookup-role-group-title { margin:0 0 8px; color:#666; font-size:12px; font-weight:700; line-height:1.3; cursor:default; }
@@ -1319,6 +1320,7 @@
             html[data-theme=dark] .va-role-lookup-panel { background:rgba(42,42,42,.82); border-color:#555; }
             html[data-theme=dark] .va-role-lookup-left { border-right-color:#555; }
             html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title, html[data-theme=dark] .va-role-lookup-role-group-title { color:#ddd; }
+            html[data-theme=dark] .va-role-lookup-actor-title { background:rgba(255,128,160,.18); color:#ff9ab3; }
             html[data-theme=dark] .va-role-lookup-role-name { color:#ddd; }
             html[data-theme=dark] .va-role-lookup-important-toggle { background:rgba(42,42,42,.92); border-color:#666; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="add"] { color:#ff9ab3; }
