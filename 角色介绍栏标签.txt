@@ -1,0 +1,349 @@
+<div class="subject_section clearit">
+<div class="flex-center-v rr">
+<a href="javascript:void(0);" class="icon toggleCrtListStyle"><span class="ico ico_list"></span></a>
+<div class="castTypeFilter dropdown" style="">
+<a href="javascript:void(0);" class="icon icon-t"><span class="ico ico_filter"></span><span class="title">筛选</span></a>
+<ul><li><a href="#" data-type="all-crt">全部角色</a></li><li><a href="#" data-type="crt-1">主角(2)</a></li><li><a href="#" data-type="crt-2">配角(6)</a></li><li><a href="#" data-type="crt-4">闲角(7)</a></li><li class="sep"></li><li><a href="#" data-type="all-rlt">全部演员</a></li><li><a href="#" data-type="primary">主要</a></li><li><a href="#" data-type="0" data-primary="1">CV(16)</a></li></ul>
+</div>
+</div>
+<h2 class="subtitle">角色介绍</h2>
+<div class="content_inner scrollable-gradient">
+    <ul id="browserItemList" class="castTypeFilterList browserCoverMedium crtList oneLine scrollable"><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195618" title="" class="thumbTip" data-original-title="赤石黑绘">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/d0/9b/195618_crt_ojU9B.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195618" class="title bve-processed">赤石黒絵</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="1">主角</span>
+            <small class="primary">(+24)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/85222" class="bve-processed">千賀光莉</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195619" title="" class="thumbTip" data-original-title="南新汰">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/d6/12/195619_crt_up989.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195619" class="title bve-processed">南新汰</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="1">主角</span>
+            <small class="primary">(+4)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/45779" class="bve-processed">梶田大嗣</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195620" title="" class="thumbTip" data-original-title="友里真夏">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/5a/2e/195620_crt_DeLG0.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195620" class="title bve-processed">友里真夏</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="2">配角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/17172" class="bve-processed">関根明良</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195621" title="" class="thumbTip" data-original-title="河野来梦">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/22/4a/195621_crt_XIu0b.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195621" class="title bve-processed">河野来夢</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="2">配角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/18600" class="bve-processed">白石晴香</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195622" title="" class="thumbTip" data-original-title="赤石凛子">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/f7/f9/195622_crt_lS9Ss.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195622" class="title bve-processed">赤石凛子</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="2">配角</span>
+            <small class="primary">(+2)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/3918" class="bve-processed">三石琴乃</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195623" title="" class="thumbTip" data-original-title="响野光太郎">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/22/9b/195623_crt_U7B0o.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195623" class="title bve-processed">響野光太郎</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="2">配角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/3861" class="bve-processed">小西克幸</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195624" title="" class="thumbTip" data-original-title="巨霸王">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/f4/06/195624_crt_0ab2a.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195624" class="title bve-processed">ジャンボキング</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="2">配角</span>
+            <small class="primary">(+2)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/12484" class="bve-processed">松井恵理子</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/195625" title="" class="thumbTip" data-original-title="哈尔冈">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/bd/77/195625_crt_zMab2.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/195625" class="title bve-processed">ハルゴン</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="2">配角</span>
+            <small class="primary">(+1)</small>
+            </p>
+            
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/215993" title="" class="thumbTip" data-original-title="凪子">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/35/0e/215993_crt_ez11q.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/215993" class="title bve-processed">凪子</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/23746" class="bve-processed">前川涼子</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/215994" title="" class="thumbTip" data-original-title="美优">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/4b/5f/215994_crt_hxHH0.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/215994" class="title bve-processed">美優</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/70754" class="bve-processed">新崎瑞季</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/216309" title="" class="thumbTip" data-original-title="记者">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://bgm.tv/img/info_only.png')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/216309" class="title bve-processed">リポーター</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/18764" class="bve-processed">中野さいま</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/216310" title="" class="thumbTip" data-original-title="警察">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://bgm.tv/img/info_only.png')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/216310" class="title bve-processed">警察</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/41759" class="bve-processed">左座翔丸</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/216311" title="" class="thumbTip" data-original-title="评论员">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://bgm.tv/img/info_only.png')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/216311" class="title bve-processed">コメンテーター</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/21350" class="bve-processed">中務貴幸</a>
+            </p>
+          
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/34406" class="bve-processed">橘龍丸</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/216312" title="" class="thumbTip" data-original-title="女子">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://bgm.tv/img/info_only.png')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/216312" class="title bve-processed">女子</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+0)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/69790" class="bve-processed">華成結</a>
+            </p>
+          
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/65898" class="bve-processed">廣原ふう</a>
+            </p>
+          
+        </div>
+      </div>
+    </li><li class="item clearit" id="added">
+      <a href="https://bgm.tv/character/28115" title="" class="thumbTip" data-original-title="广播">
+        <span class="avatarNeue avatarCoverPortrait avatarTop" style="background-image:url('https://lain.bgm.tv/pic/crt/m/70/d8/28115_crt_vL10O.jpg')"></span>
+      </a>
+      <div class="inner ">
+        <p class="title">
+          
+          <a href="https://bgm.tv/character/28115" class="title bve-processed">アナウンス</a>
+        </p>
+        <div class="info">
+          <p class="jobs">
+            <span class="badge_job_tip" attr-crt-type="4">闲角</span>
+            <small class="primary">(+56)</small>
+            </p>
+            
+            <p class="badge_actor" attr-rlt-type="0" att-rlt-type-name="CV" attr-rlt-primary="1" style="display:" flex'="">
+              <span class="tip_i">CV</span>
+              <a href="/person/27806" class="bve-processed">虎島貴明</a>
+            </p>
+          
+        </div>
+      </div>
+    </li></ul>
+</div>
+
+<a href="/subject/617123/characters" class="more">更多角色 »</a></div>
