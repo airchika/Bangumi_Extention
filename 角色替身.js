@@ -224,6 +224,21 @@
         })
     }
 
+    function fetch_text(url, options = {}, timeout = 12000) {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), timeout)
+        return fetch(url, { ...options, signal: controller.signal }).then(async response => {
+            clearTimeout(timer)
+            const text = await response.text()
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            return text
+        }, error => {
+            clearTimeout(timer)
+            if (error.name === 'AbortError') throw new Error('请求超时')
+            throw error
+        })
+    }
+
     function has_cloud_settings() {
         try {
             return typeof chiiApp !== 'undefined' && !!chiiApp?.cloud_settings
@@ -657,10 +672,10 @@
         return role.name || role.name_cn || `角色 ${role.id}`
     }
 
-    function find_character_section() {
-        const sections = [...document.querySelectorAll('.subject_section')]
+    function find_character_section(root = document) {
+        const sections = [...root.querySelectorAll('.subject_section')]
         return sections.find(section => section.querySelector('h2.subtitle')?.textContent?.trim().includes('角色介绍'))
-            || document.querySelector('#browserItemList')?.closest('.subject_section')
+            || root.querySelector('#browserItemList')?.closest('.subject_section')
     }
 
     function find_subject_panel_host() {
@@ -679,21 +694,26 @@
         const by_id = new Map()
         const character_by_id = new Map()
         const current_character_actors = new Map()
-        for (const li of section.querySelectorAll('li.item')) {
-            const character_link = li.querySelector('a[href*="/character/"].title, p.title a[href*="/character/"]')
+        for (const li of section.querySelectorAll('.item')) {
+            const character_link = li.querySelector('a[href*="/character/"].title, p.title a[href*="/character/"], h2 > a[href*="/character/"]')
             const current_character_id = parse_numeric_id(character_link?.getAttribute('href'), 'character')
             if (!current_character_id) continue
             const thumb = li.querySelector('a.thumbTip[href*="/character/"]')
+            const cn_tip = li.querySelector('h2 .tip')
             const character = character_by_id.get(current_character_id) || {
                 id: current_character_id,
                 name: character_link?.textContent?.trim() || `角色 ${current_character_id}`,
-                name_cn: thumb?.getAttribute('data-original-title')?.trim() || thumb?.getAttribute('title')?.trim() || character_link?.textContent?.trim() || `角色 ${current_character_id}`,
+                name_cn: thumb?.getAttribute('data-original-title')?.trim()
+                    || thumb?.getAttribute('title')?.trim()
+                    || cn_tip?.textContent?.trim()
+                    || character_link?.textContent?.trim()
+                    || `角色 ${current_character_id}`,
                 actors: [],
             }
             character_by_id.set(current_character_id, character)
             if (!characters.includes(character)) characters.push(character)
 
-            for (const link of li.querySelectorAll('p.badge_actor a[href*="/person/"]')) {
+            for (const link of li.querySelectorAll('p.badge_actor a[href*="/person/"], .actorBadge p a[href*="/person/"]')) {
                 const id = parse_numeric_id(link.getAttribute('href'), 'person')
                 if (!id) continue
                 const actor = by_id.get(id) || {
@@ -713,6 +733,29 @@
             }
         }
         return { actors, characters, current_character_actors }
+    }
+
+    async function read_full_subject_characters() {
+        const html = await fetch_text(`/subject/${state.subject_id}/characters`)
+        const doc = new DOMParser().parseFromString(html, 'text/html')
+        const section = doc.querySelector('#browserItemList') || find_character_section(doc) || doc
+        const result = read_actors(section)
+        if (!result.characters.length) throw new Error('完整角色页没有找到角色')
+        return result
+    }
+
+    async function read_subject_characters(character_section) {
+        const current = character_section
+            ? read_actors(character_section)
+            : { actors: [], characters: [], current_character_actors: new Map() }
+        if (state.subject_type === 1) return current
+        try {
+            const full = await read_full_subject_characters()
+            return full.characters.length >= current.characters.length ? full : current
+        } catch (error) {
+            console.warn('[角色替身] 完整角色列表加载失败，使用当前页面角色', error)
+            return current
+        }
     }
 
     function set_status(text) {
@@ -1348,9 +1391,7 @@
         const character_section = find_character_section()
         const section = character_section || find_subject_panel_host()
         if (!section) return
-        const { actors, characters, current_character_actors } = character_section
-            ? read_actors(character_section)
-            : { actors: [], characters: [], current_character_actors: new Map() }
+        const { actors, characters, current_character_actors } = await read_subject_characters(character_section)
         if (state.subject_type === 1) {
             actors.length = 0
             characters.length = 0
