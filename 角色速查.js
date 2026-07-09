@@ -16,6 +16,8 @@
     const CACHE_TTL = 12 * 60 * 60 * 1000
     const SUBJECT_TYPES = [2, 4]
     const REFRESH_CONFIG_KEY = 'va_role_lookup_refresh_cache'
+    const IMPORTANT_ROLES_CONFIG_KEY = 'va_role_lookup_important_roles_v1'
+    const IMPORTANT_ROLES_LOCAL_KEY = 'bangumi_va_role_lookup_important_roles_v1'
     const NO_IMAGE = 'https://bgm.tv/img/info_only.png'
     const PRODUCTION_GROUPS = [{
         id: 'animation',
@@ -62,6 +64,8 @@
         request_serial: 0,
         refresh_value: 'idle',
         status_text: '',
+        important_roles: { version: 1, actors: {} },
+        important_roles_loaded: false,
         current_character_actors: new Map(),
         actor_by_id: new Map(),
         current_panel: null,
@@ -200,6 +204,109 @@
             if (error.name === 'AbortError') throw new Error('请求超时')
             throw error
         })
+    }
+
+    function has_cloud_settings() {
+        try {
+            return typeof chiiApp !== 'undefined' && !!chiiApp?.cloud_settings
+        } catch (error) {
+            return false
+        }
+    }
+
+    function normalize_important_roles(value) {
+        if (!value) return { version: 1, actors: {} }
+        let parsed = value
+        if (typeof value === 'string') {
+            try {
+                parsed = JSON.parse(value)
+            } catch (error) {
+                return { version: 1, actors: {} }
+            }
+        }
+        if (!parsed || typeof parsed !== 'object') return { version: 1, actors: {} }
+        if (!parsed.actors || typeof parsed.actors !== 'object') parsed.actors = {}
+        parsed.version = 1
+        return parsed
+    }
+
+    function load_important_roles() {
+        if (state.important_roles_loaded) return state.important_roles
+        try {
+            state.important_roles = normalize_important_roles(localStorage.getItem(IMPORTANT_ROLES_LOCAL_KEY))
+        } catch (error) {
+            state.important_roles = { version: 1, actors: {} }
+        }
+        try {
+            if (has_cloud_settings()) {
+                const cloud_roles = normalize_important_roles(chiiApp.cloud_settings.get(IMPORTANT_ROLES_CONFIG_KEY))
+                state.important_roles = merge_important_roles(state.important_roles, cloud_roles)
+                localStorage.setItem(IMPORTANT_ROLES_LOCAL_KEY, JSON.stringify(state.important_roles))
+            }
+        } catch (error) {
+            /* 本地存储仍可用 */
+        }
+        state.important_roles_loaded = true
+        return state.important_roles
+    }
+
+    function merge_important_roles(local_roles, cloud_roles) {
+        const merged = normalize_important_roles(local_roles)
+        const cloud = normalize_important_roles(cloud_roles)
+        for (const [actor_id, roles] of Object.entries(cloud.actors)) {
+            if (!merged.actors[actor_id] || typeof merged.actors[actor_id] !== 'object') merged.actors[actor_id] = {}
+            Object.assign(merged.actors[actor_id], roles)
+        }
+        return merged
+    }
+
+    function save_important_roles() {
+        try {
+            localStorage.setItem(IMPORTANT_ROLES_LOCAL_KEY, JSON.stringify(state.important_roles))
+        } catch (error) {
+            set_status(`已标记本地保存失败：${error.message || error}`)
+            return false
+        }
+
+        if (!has_cloud_settings()) {
+            return true
+        }
+        try {
+            chiiApp.cloud_settings.update({ [IMPORTANT_ROLES_CONFIG_KEY]: JSON.stringify(state.important_roles) })
+            chiiApp.cloud_settings.save()
+        } catch (error) {
+            set_status(`已标记保存到本地，云同步失败：${error.message || error}`)
+        }
+        return true
+    }
+
+    function important_actor_roles(actor_id) {
+        load_important_roles()
+        const key = String(actor_id)
+        if (!state.important_roles.actors[key] || typeof state.important_roles.actors[key] !== 'object') {
+            state.important_roles.actors[key] = {}
+        }
+        return state.important_roles.actors[key]
+    }
+
+    function is_important_role(actor, role) {
+        return !!important_actor_roles(actor.id)[role.key]
+    }
+
+    function set_important_role(actor, role, important) {
+        const roles = important_actor_roles(actor.id)
+        if (important) {
+            roles[role.key] = {
+                id: Number(role.id),
+                name: role.name,
+                name_cn: role.name_cn,
+                image: role.image,
+                updated_at: Date.now(),
+            }
+        } else {
+            delete roles[role.key]
+        }
+        return save_important_roles()
     }
 
     async function fetch_all_collections(username, subject_type) {
@@ -567,7 +674,7 @@
         if (node) node.textContent = text
     }
 
-    function render_role_cards(container, roles) {
+    function render_role_cards(container, roles, options = {}) {
         container.textContent = ''
         if (!roles.length) {
             container.append(create_element('<div class="va-role-lookup-empty">自己的动画/游戏收藏中没有找到该声优配过的角色。</div>'))
@@ -593,9 +700,67 @@
             card.addEventListener('focus', () => hydrate_role_actor_names(role, card), { once: true })
 
             card.append(avatar, name)
+            if (options.action === 'toggle-important' && options.actor) {
+                const important = options.importantSet?.has(role.key)
+                const button = document.createElement('button')
+                button.type = 'button'
+                button.className = 'va-role-lookup-important-toggle'
+                button.dataset.action = important ? 'remove' : 'add'
+                button.textContent = important ? '-' : '+'
+                button.title = important ? '移出已标记' : '加入已标记'
+                button.addEventListener('click', event => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    options.onToggle?.(role, !important)
+                })
+                card.append(button)
+            }
             grid.append(card)
         }
         container.append(grid)
+    }
+
+    function render_actor_role_groups(container, actor, roles) {
+        load_important_roles()
+        const important_map = important_actor_roles(actor.id)
+        const important_set = new Set(Object.keys(important_map))
+        const important_roles = roles.filter(role => important_set.has(role.key))
+        const existing_details = container.querySelector('.va-role-lookup-role-details')
+        const preserve_open = existing_details ? existing_details.open : null
+
+        container.textContent = ''
+
+        const important_section = document.createElement('section')
+        important_section.className = 'va-role-lookup-role-group'
+        const important_title = document.createElement('h4')
+        important_title.className = 'va-role-lookup-role-group-title'
+        important_title.textContent = '已标记'
+        const important_body = document.createElement('div')
+        important_body.className = 'va-role-lookup-role-group-body'
+        if (important_roles.length) render_role_cards(important_body, important_roles)
+        else important_body.append(create_element('<div class="va-role-lookup-empty va-role-lookup-small-empty">还没有已标记角色。</div>'))
+        important_section.append(important_title, important_body)
+
+        const all_section = document.createElement('details')
+        all_section.className = 'va-role-lookup-role-group va-role-lookup-role-details'
+        all_section.open = preserve_open === null ? !important_roles.length : preserve_open
+        const all_title = document.createElement('summary')
+        all_title.className = 'va-role-lookup-role-group-title'
+        all_title.textContent = `所有角色（${roles.length}）`
+        const all_body = document.createElement('div')
+        all_body.className = 'va-role-lookup-role-group-body'
+        render_role_cards(all_body, roles, {
+            action: 'toggle-important',
+            actor,
+            importantSet: important_set,
+            onToggle: (role, important) => {
+                const saved = set_important_role(actor, role, important)
+                if (saved) render_actor_role_groups(container, actor, roles)
+            },
+        })
+        all_section.append(all_title, all_body)
+
+        container.append(important_section, all_section)
     }
 
     async function load_production_people(force = false) {
@@ -826,7 +991,7 @@
                 if (serial !== state.request_serial) return
                 await hydrate_cn_names(roles)
                 if (serial !== state.request_serial) return
-                render_role_cards(content, roles)
+                render_actor_role_groups(content, actor, roles)
             }
             set_status('')
         } catch (error) {
@@ -1030,7 +1195,7 @@
             .va-role-lookup-production-group { min-width:0; display:flex; flex-direction:column; gap:4px; }
             .va-role-lookup-production-title { display:block; color:#555; font-weight:700; padding:0 9px 2px; }
             .va-role-lookup-production-empty { color:#aaa; padding:5px 9px; }
-            .va-role-lookup-right { min-width:0; max-height:360px; overflow:auto; }
+            .va-role-lookup-right { min-width:0; max-height:360px; overflow:auto; padding-left:6px; box-sizing:border-box; }
             .va-role-lookup-hint, .va-role-lookup-empty, .va-role-lookup-loading, .va-role-lookup-error { min-height:88px; display:flex; align-items:center; justify-content:center; color:#888; text-align:center; }
             .va-role-lookup-error { flex-direction:column; gap:8px; }
             .va-role-lookup-error p { margin:0; }
@@ -1039,21 +1204,34 @@
             .va-role-lookup-result-section { margin-bottom:14px; }
             .va-role-lookup-result-section:last-child { margin-bottom:0; }
             .va-role-lookup-result-title { margin:0 0 8px; padding-bottom:4px; border-bottom:1px solid rgba(127,127,127,.24); color:#555; font-size:13px; line-height:1.3; }
+            .va-role-lookup-role-group { margin:0 0 12px; }
+            .va-role-lookup-role-group:last-child { margin-bottom:0; }
+            .va-role-lookup-role-group-title { margin:0 0 8px; color:#666; font-size:12px; font-weight:700; line-height:1.3; cursor:default; }
+            .va-role-lookup-role-details > .va-role-lookup-role-group-title { cursor:pointer; }
+            .va-role-lookup-role-group-body { min-width:0; }
+            .va-role-lookup-small-empty { min-height:40px; justify-content:flex-start; }
             .va-role-lookup-card { position:relative; display:flex; flex-direction:column; gap:4px; min-width:0; text-decoration:none; color:inherit; }
             .va-role-lookup-card:hover .va-role-lookup-role-name { color:#c45; }
+            .va-role-lookup-important-toggle { position:absolute; top:0; right:0; width:28px; height:28px; border:1px solid rgba(0,0,0,.2); border-radius:999px; background:rgba(255,255,255,.94); cursor:pointer; font-size:21px; line-height:24px; font-weight:700; padding:0; text-align:center; box-shadow:0 1px 4px rgba(0,0,0,.2); }
+            .va-role-lookup-important-toggle[data-action="add"] { color:#d64a76; border-color:rgba(214,74,118,.55); }
+            .va-role-lookup-important-toggle[data-action="remove"] { color:#3478d4; border-color:rgba(52,120,212,.55); }
+            .va-role-lookup-important-toggle:hover { background:#fff; }
             .va-role-lookup-avatar { display:block; width:72px; height:96px; margin:0 auto; border-radius:3px; box-shadow:0 1px 3px rgba(0,0,0,.16); image-rendering:auto !important; }
             .va-role-lookup-role-name { display:block; min-height:2.4em; color:#555; font-size:12px; line-height:1.2; text-align:center; word-break:break-word; overflow:hidden; }
             html[data-theme=dark] .va-role-lookup-toggle { background:#333; color:#ddd; border-color:#555; }
             html[data-theme=dark] .va-role-lookup-panel { background:rgba(42,42,42,.82); border-color:#555; }
             html[data-theme=dark] .va-role-lookup-left { border-right-color:#555; }
-            html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title { color:#ddd; }
+            html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title, html[data-theme=dark] .va-role-lookup-role-group-title { color:#ddd; }
             html[data-theme=dark] .va-role-lookup-role-name { color:#ddd; }
+            html[data-theme=dark] .va-role-lookup-important-toggle { background:rgba(42,42,42,.92); border-color:#666; }
+            html[data-theme=dark] .va-role-lookup-important-toggle[data-action="add"] { color:#ff9ab3; }
+            html[data-theme=dark] .va-role-lookup-important-toggle[data-action="remove"] { color:#7eb0ff; }
             @media (max-width: 640px) {
                 .va-role-lookup-panel { grid-template-columns:1fr; }
                 .va-role-lookup-panel.is-production-mode { grid-template-columns:1fr; }
                 .va-role-lookup-left { max-height:140px; border-right:0; border-bottom:1px solid #e5e5e5; padding-right:0; padding-bottom:8px; }
                 .va-role-lookup-production-left { display:flex; flex-direction:column; }
-                .va-role-lookup-right { max-height:420px; }
+                .va-role-lookup-right { max-height:420px; padding-left:0; }
                 .va-role-lookup-grid { grid-template-columns:repeat(auto-fill, minmax(82px, 1fr)); }
             }
         `
@@ -1068,7 +1246,7 @@
         const toolbar = create_element(`
             <div class="va-role-lookup-toolbar">
                 <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="voice" aria-expanded="false">角色速查</button>
-                <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="production" aria-expanded="false">动画制作</button>
+                <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="production" aria-expanded="false">制作速查</button>
                 <span class="va-role-lookup-status"></span>
             </div>
         `)
