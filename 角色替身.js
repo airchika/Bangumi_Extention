@@ -143,6 +143,17 @@
                 transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存清理已中止')) }
             })
         },
+
+        async clear() {
+            const db = await open_db()
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(STORE_NAME, 'readwrite')
+                transaction.objectStore(STORE_NAME).clear()
+                transaction.oncomplete = () => { db.close(); resolve() }
+                transaction.onerror = () => { db.close(); reject(transaction.error) }
+                transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存清理已中止')) }
+            })
+        },
     }
 
     function get_username() {
@@ -456,12 +467,26 @@
         return detail
     }
 
-    async function get_character_persons(character_id, force = false) {
-        const key = `character-persons:${character_id}`
+    async function get_character_primary_persons(character_id, force = false) {
+        const key = `character-primary-persons:${character_id}`
         let persons = force ? null : await cache.get(key)
         if (!persons) {
-            persons = await fetch_json(`https://api.bgm.tv/v0/characters/${character_id}/persons`)
-            if (!Array.isArray(persons)) throw new Error('角色人物响应格式无效')
+            const html = await fetch_text(`/character/${character_id}`)
+            const doc = new DOMParser().parseFromString(html, 'text/html')
+            const seen = new Set()
+            persons = []
+            for (const badge of doc.querySelectorAll('li.badge_actor')) {
+                const relation_type = badge.getAttribute('attr-rlt-type')
+                const relation_name = badge.getAttribute('att-rlt-type-name')
+                    || badge.getAttribute('attr-rlt-type-name')
+                if (relation_type !== '0' && relation_name !== 'CV') continue
+                const link = badge.querySelector('h3 a[href*="/person/"]')
+                const id = parse_numeric_id(link?.getAttribute('href'), 'person')
+                if (!id || seen.has(id)) continue
+                seen.add(id)
+                persons.push({ id: Number(id), name: link.textContent.trim() || `person/${id}` })
+            }
+            if (!persons.length) throw new Error('角色页面没有找到日配声优')
             await cache.set(key, persons)
         }
         return persons
@@ -639,12 +664,16 @@
     }
 
     function build_role_title(role) {
-        const works = role.works?.length ? role.works.map(work => work.name).join(' / ') : '暂无'
-        return [
+        const lines = [
             `日语名：${display_origin_name(role)}`,
             `声优：${role_actor_label(role)}`,
-            `出演作品：${works}`,
-        ].join('\n')
+        ]
+        if (role.works?.length) {
+            lines.push('出演作品：', ...role.works.map(work => `  ${work.name}`))
+        } else {
+            lines.push('出演作品：暂无')
+        }
+        return lines.join('\n')
     }
 
     async function hydrate_role_actor_names(role, card) {
@@ -655,7 +684,7 @@
             return
         }
         try {
-            const persons = await get_character_persons(role.id)
+            const persons = await get_character_primary_persons(role.id)
             role.actor_names = cache_full_role_actor_names(role, persons)
             role.actor_names_loaded = true
             card.title = build_role_title(role)
@@ -759,7 +788,15 @@
             character_by_id.set(current_character_id, character)
             if (!characters.includes(character)) characters.push(character)
 
-            for (const link of li.querySelectorAll('p.badge_actor a[href*="/person/"], .actorBadge p a[href*="/person/"]')) {
+            for (const link of li.querySelectorAll('p.badge_actor a[href*="/person/"], .actorBadge p a[href*="/person/"], li.badge_actor h3 a[href*="/person/"]')) {
+                const badge = link.closest('.actorBadge, .badge_actor')
+                const relation_type = badge?.getAttribute('attr-rlt-type')
+                const relation_name = badge?.getAttribute('att-rlt-type-name')
+                    || badge?.getAttribute('attr-rlt-type-name')
+                if (relation_type !== null && relation_type !== '0') continue
+                if (relation_type === null && relation_name && relation_name !== 'CV') continue
+                const primary = badge?.getAttribute('attr-rlt-primary') || badge?.getAttribute('att-rlt-primary')
+                if (primary && primary !== '1') continue
                 const id = parse_numeric_id(link.getAttribute('href'), 'person')
                 if (!id) continue
                 const actor = by_id.get(id) || {
@@ -1251,13 +1288,7 @@
         } else render_production_left(panel)
     }
 
-    async function refresh_cache(force_status = true) {
-        const username = get_username()
-        if (!username) {
-            set_status('需要登录后才能刷新角色替身缓存')
-            return
-        }
-        if (force_status) set_status('正在刷新角色替身缓存...')
+    function reset_runtime_cache() {
         state.collection_promise = null
         state.collection_loaded_at = 0
         state.collection_index = null
@@ -1269,10 +1300,27 @@
         state.role_actor_names.clear()
         state.role_actor_names_complete.clear()
         seed_current_character_actor_names(state.current_character_actors)
+    }
+
+    async function clear_local_cache() {
+        reset_runtime_cache()
+        await cache.clear()
+        set_status('角色替身本地缓存已清除')
+    }
+
+    async function refresh_cache(force_status = true) {
+        const username = get_username()
+        if (!username) {
+            set_status('需要登录后才能刷新角色替身缓存')
+            return
+        }
+        if (force_status) set_status('正在刷新角色替身缓存...')
+        reset_runtime_cache()
         await get_collections(true)
         await cache.delete_prefix('person-characters:')
         await cache.delete_prefix('character:')
         await cache.delete_prefix('character-persons:')
+        await cache.delete_prefix('character-primary-persons:')
         await cache.delete_prefix('subject-persons:')
         await cache.delete_prefix('person-subjects:')
         if (force_status) set_status('角色替身缓存已刷新')
@@ -1322,6 +1370,38 @@
                         { value: 'refresh', label: '立即刷新' },
                     ],
                 })
+                if (chiiLib.ukagaka.addPanelTab) {
+                    chiiLib.ukagaka.addPanelTab({
+                        tab: 'va_role_lookup',
+                        label: '角色替身',
+                        type: 'custom',
+                        customContent: () => `
+                            <div class="va-role-lookup-cache-settings">
+                                <h3>本地缓存</h3>
+                                <p>清除角色、人物、条目和收藏查询缓存；不会删除已标记角色等个性化设置。</p>
+                                <button type="button" class="btnBlue va-role-lookup-clear-cache">清除本地缓存</button>
+                                <span class="va-role-lookup-clear-cache-status" style="margin-left:8px"></span>
+                            </div>
+                        `,
+                        onInit: (tab_selector, tab_content) => {
+                            tab_content.off('click', '.va-role-lookup-clear-cache').on('click', '.va-role-lookup-clear-cache', async function (event) {
+                                event.preventDefault()
+                                const button = $(this)
+                                const status = tab_content.find('.va-role-lookup-clear-cache-status')
+                                button.prop('disabled', true)
+                                status.text('正在清除...')
+                                try {
+                                    await clear_local_cache()
+                                    status.text('已清除')
+                                } catch (error) {
+                                    status.text(`清除失败：${error.message || error}`)
+                                } finally {
+                                    button.prop('disabled', false)
+                                }
+                            })
+                        },
+                    })
+                }
             } else if (attempts < 10) {
                 attempts++
                 setTimeout(try_register, 500)
