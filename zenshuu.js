@@ -1,16 +1,19 @@
 // ==UserScript==
-// @name         Bangumi 首页动态聚合按钮 全修
+// @name         Bangumi 动态聚合按钮 全修
 // @homepage     https://bangumi.tv/dev/app/6542
 // @namespace    air.bgm.timeline.simple.combo
-// @version      0.2.3
-// @description  在 Bangumi 动态栏新增一个固定聚合按钮：好友吐槽、日志、有评论收藏。
+// @version      0.2.4
+// @description  聚合好友的吐槽、日志和有评论收藏；用户页仅聚合当前用户。
 // @author       Air + ChatGPT
 // @match        http*://bgm.tv/
 // @match        http*://bgm.tv/timeline*
+// @match        http*://bgm.tv/user/*/timeline*
 // @match        http*://bangumi.tv/
 // @match        http*://bangumi.tv/timeline*
+// @match        http*://bangumi.tv/user/*/timeline*
 // @match        http*://chii.in/
 // @match        http*://chii.in/timeline*
+// @match        http*://chii.in/user/*/timeline*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -23,7 +26,10 @@
 
   const BTN_ID = 'air_timeline_combo_tab';
   const BTN_TEXT = '全修';
-  const ACTIVE_STORAGE_KEY = 'air_timeline_combo_active';
+  const USER_TIMELINE_PATH = getUserTimelinePath();
+  const ACTIVE_STORAGE_KEY = USER_TIMELINE_PATH
+    ? `air_timeline_combo_active:${USER_TIMELINE_PATH}`
+    : 'air_timeline_combo_active';
 
   // 每次初始加载 / 再来点时抓取的页数。
   // 有评论收藏通常比吐槽、日志稀疏，所以收藏页多抓几页。
@@ -258,11 +264,17 @@
   }
 
   function buildTimelineUrl(type, page) {
-    const url = new URL('/timeline', location.origin);
+    // 用户页只聚合当前用户的动态，其它页面保持原来的全好友数据源。
+    const url = new URL(USER_TIMELINE_PATH || '/timeline', location.origin);
     url.searchParams.set('type', type);
     url.searchParams.set('page', String(page));
     url.searchParams.set('ajax', '1');
     return url.toString();
+  }
+
+  function getUserTimelinePath() {
+    const match = location.pathname.match(/^\/user\/[^/]+\/timeline\/?$/);
+    return match ? location.pathname.replace(/\/$/, '') : '';
   }
 
   function parseTimelineHtml(html, type, page) {
@@ -422,6 +434,7 @@
       if (header !== currentHeader) {
         currentHeader = header;
         const h4 = document.createElement('h4');
+        h4.className = 'Header';
         h4.textContent = header;
         timeline.appendChild(h4);
 
