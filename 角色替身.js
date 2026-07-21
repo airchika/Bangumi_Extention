@@ -89,7 +89,26 @@
         current_character_actors: new Map(),
         actor_by_id: new Map(),
         current_panel: null,
-        show_spoiler_roles: localStorage.getItem(SHOW_SPOILER_ROLES_KEY) === 'on',
+        show_spoiler_roles: load_spoiler_roles_setting(),
+    }
+
+    function load_spoiler_roles_setting() {
+        try {
+            return localStorage.getItem(SHOW_SPOILER_ROLES_KEY) === 'on'
+        } catch (error) {
+            console.warn('[角色替身] 读取剧透设置失败', error)
+            return false
+        }
+    }
+
+    function save_spoiler_roles_setting(value) {
+        try {
+            localStorage.setItem(SHOW_SPOILER_ROLES_KEY, value ? 'on' : 'off')
+            return true
+        } catch (error) {
+            console.warn('[角色替身] 保存剧透设置失败', error)
+            return false
+        }
     }
 
     function pr(req) {
@@ -227,6 +246,20 @@
         })
     }
 
+    async function map_with_concurrency(items, limit, mapper) {
+        const results = new Array(items.length)
+        let next_index = 0
+        const worker = async () => {
+            while (next_index < items.length) {
+                const index = next_index++
+                results[index] = await mapper(items[index], index)
+            }
+        }
+        const worker_count = Math.min(Math.max(1, limit), items.length)
+        await Promise.all(Array.from({ length: worker_count }, worker))
+        return results
+    }
+
     function has_cloud_settings() {
         try {
             return typeof chiiApp !== 'undefined' && !!chiiApp?.cloud_settings
@@ -335,14 +368,13 @@
         const base = `https://api.bgm.tv/v0/users/${encodeURIComponent(username)}/collections?subject_type=${subject_type}&limit=${limit}&offset=`
         const first = await fetch_json(base + 0)
         if (!Array.isArray(first.data)) throw new Error('收藏响应格式无效')
-        const requests = []
-        for (let offset = limit; offset < Number(first.total || 0); offset += limit) {
-            requests.push(fetch_json(base + offset).then(page => {
-                if (!Array.isArray(page.data)) throw new Error('收藏分页响应格式无效')
-                return page.data
-            }))
-        }
-        const pages = await Promise.all(requests)
+        const offsets = []
+        for (let offset = limit; offset < Number(first.total || 0); offset += limit) offsets.push(offset)
+        const pages = await map_with_concurrency(offsets, 4, async offset => {
+            const page = await fetch_json(base + offset)
+            if (!Array.isArray(page.data)) throw new Error('收藏分页响应格式无效')
+            return page.data
+        })
         return first.data.concat(...pages)
     }
 
@@ -640,7 +672,14 @@
     async function hydrate_cn_names(roles) {
         const missing = roles.filter(role => !role.name_cn)
         if (!missing.length) return
-        const details = await Promise.allSettled([...new Set(missing.map(role => role.id))].map(id => get_character_detail(id)))
+        const ids = [...new Set(missing.map(role => role.id))]
+        const details = await map_with_concurrency(ids, 6, async id => {
+            try {
+                return { status: 'fulfilled', value: await get_character_detail(id) }
+            } catch (reason) {
+                return { status: 'rejected', reason }
+            }
+        })
         const cn_by_id = new Map()
         for (const result of details) {
             if (result.status !== 'fulfilled') continue
@@ -1175,12 +1214,13 @@
 
     function set_spoiler_roles_visible(value) {
         state.show_spoiler_roles = !!value
-        localStorage.setItem(SHOW_SPOILER_ROLES_KEY, state.show_spoiler_roles ? 'on' : 'off')
+        const saved = save_spoiler_roles_setting(state.show_spoiler_roles)
         const panel = state.current_panel
         update_spoiler_toggle(panel?.closest('.va-role-lookup-host'))
         if (panel && state.mode === 'voice' && state.selected_character) {
             select_character(panel, state.selected_character)
         }
+        if (!saved) set_status('剧透显示设置仅在当前页面生效')
     }
 
     async function refresh_cache(force_status = true) {
@@ -1314,6 +1354,7 @@
             html[data-theme=dark] .va-role-lookup-left { border-right-color:#555; }
             html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title, html[data-theme=dark] .va-role-lookup-role-group-title { color:#ddd; }
             html[data-theme=dark] .va-role-lookup-role-name { color:#ddd; }
+            html[data-theme=dark] .va-role-lookup-card.is-spoiler-hidden .va-role-lookup-role-name, html[data-theme=dark] .va-role-lookup-card.is-spoiler-hidden:hover .va-role-lookup-role-name { color:#aaa; }
             html[data-theme=dark] .va-role-lookup-important-toggle { background:rgba(42,42,42,.92); border-color:#666; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="add"] { color:#ff9ab3; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="remove"] { color:#7eb0ff; }
@@ -1354,7 +1395,6 @@
 
         if (has_voice_mode) render_voice_left(panel, characters)
         state.current_panel = panel
-        update_spoiler_toggle(host)
 
         toolbar.querySelector('.va-role-lookup-spoiler-toggle')?.addEventListener('click', () => {
             set_spoiler_roles_visible(!state.show_spoiler_roles)
@@ -1375,6 +1415,7 @@
         })
         const more = section.querySelector(':scope > a.more')
         host.append(toolbar, panel)
+        update_spoiler_toggle(host)
         if (more) more.before(host)
         else if (section === document.body) document.body.prepend(host)
         else section.append(host)

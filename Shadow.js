@@ -18,6 +18,16 @@
     let shadow_post_shortcut_session_value = null
     let shadow_subject_important_session_value = null
 
+    function get_logged_in_username() {
+        try {
+            let username = typeof window.CHOBITS_USERNAME === 'string' ? window.CHOBITS_USERNAME : ''
+            if (!username && typeof CHOBITS_USERNAME === 'string') username = CHOBITS_USERNAME
+            return /^[A-Za-z0-9_]{1,32}$/.test(username) ? username : ''
+        } catch (error) {
+            return ''
+        }
+    }
+
     function has_bangumi_cloud_settings() {
         try {
             return typeof chiiApp !== 'undefined' && !!chiiApp?.cloud_settings
@@ -175,6 +185,7 @@
 
         function inject_floor_shortcut(floor) {
             if (!should_show_shadow_post_shortcut()) return
+            if (!get_logged_in_username()) return
             const is_component = has_bangumi_cloud_settings()
             const { username, nickname } = get_floor_identity(floor)
             if (!username) return
@@ -1088,9 +1099,12 @@
             const button = document.querySelector('.shadow-subject-important-button')
             if (!button) return
             const marked = important_subject_ids.has(subject_id)
-            button.textContent = marked ? '重要' : '标为重要'
-            button.title = marked ? '从重要番剧中移除' : '标记为重要番剧'
-            button.setAttribute('aria-pressed', marked ? 'true' : 'false')
+            const label = marked ? '重要' : '标为重要'
+            const title = marked ? '从重要番剧中移除' : '标记为重要番剧'
+            const pressed = marked ? 'true' : 'false'
+            if (button.textContent !== label) button.textContent = label
+            if (button.title !== title) button.title = title
+            if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed)
             button.classList.toggle('is-important', marked)
         }
         const ensure_button = () => {
@@ -1119,7 +1133,14 @@
         window.addEventListener('shadow-subject-important-setting-change', ensure_button)
         let scheduled = false
         const observer = new MutationObserver(mutations => {
-            if (!mutations.some(mutation => mutation.addedNodes.length || mutation.removedNodes.length)) return
+            const has_relevant_mutation = mutations.some(mutation => {
+                if (!mutation.addedNodes.length && !mutation.removedNodes.length) return false
+                const target = mutation.target.nodeType === Node.ELEMENT_NODE
+                    ? mutation.target
+                    : mutation.target.parentElement
+                return !target?.closest?.('.shadow-subject-important-button')
+            })
+            if (!has_relevant_mutation) return
             if (scheduled) return
             scheduled = true
             requestAnimationFrame(() => {
@@ -1313,6 +1334,20 @@
         }
     }
 
+    async function map_with_concurrency(items, limit, mapper) {
+        const results = new Array(items.length)
+        let next_index = 0
+        const worker = async () => {
+            while (next_index < items.length) {
+                const index = next_index++
+                results[index] = await mapper(items[index], index)
+            }
+        }
+        const worker_count = Math.min(Math.max(1, limit), items.length)
+        await Promise.all(Array.from({ length: worker_count }, worker))
+        return results
+    }
+
     function getSubjectDisplayName(subject) {
         return subject?.name_cn || subject?.name || '未命名条目'
     }
@@ -1443,9 +1478,13 @@
 
             async function set(key, value) {
                 const db = await open_db()
-                const store = db.transaction(STORE, 'readwrite').objectStore(STORE)
-                store.put(value, key)
-                db.close()
+                return new Promise((resolve, reject) => {
+                    const transaction = db.transaction(STORE, 'readwrite')
+                    transaction.objectStore(STORE).put(value, key)
+                    transaction.oncomplete = () => { db.close(); resolve() }
+                    transaction.onerror = () => { db.close(); reject(transaction.error) }
+                    transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存写入事务已中止')) }
+                })
             }
 
             async function deleteByKey(key) {
@@ -1564,24 +1603,21 @@
             const typeParam = subject_id > 0 ? `subject_type=${subject_id}&` : ''
             const api = `https://api.bgm.tv/v0/users/${username}/collections?${typeParam}limit=${limit}&offset=`
 
-            const res = await fetch(api + 0)
+            const res = await fetchWithTimeout(api + 0, {}, 12000)
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
             const page = await res.json()
             if (!Array.isArray(page.data)) throw new Error(page.description || page.message || '收藏数据格式无效')
             const l = page.data
 
-            const p_l = []
-            for (let i = limit; i < page.total; i += limit) {
-                const p = fetch(api + i).then(async (res) => {
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-                    const page = await res.json()
-                    if (!Array.isArray(page.data)) throw new Error(page.description || page.message || '收藏数据格式无效')
-                    return page.data
-                })
-                p_l.push(p)
-            }
-
-            const ll = await Promise.all(p_l)
+            const offsets = []
+            for (let offset = limit; offset < Number(page.total || 0); offset += limit) offsets.push(offset)
+            const ll = await map_with_concurrency(offsets, 4, async offset => {
+                const response = await fetchWithTimeout(api + offset, {}, 12000)
+                if (!response.ok) throw new Error(`HTTP ${response.status}`)
+                const next_page = await response.json()
+                if (!Array.isArray(next_page.data)) throw new Error(next_page.description || next_page.message || '收藏数据格式无效')
+                return next_page.data
+            })
             return l.concat(...ll)
         }
 
@@ -2053,44 +2089,66 @@
 
     // ─── 状态 ───
 
-    let analyzeLoading = false
     let self_username = ''
     let visited_username = ''
     let comparison_username = ''
     let cur_user1, cur_user2
     let mobile_settings_open = false
+    let analyze_page_render_id = 0
+    let analyze_page_document_controller = null
 
     // ─── 注入分析页面 ───
 
     async function inject_analyze_page(force = false) {
+        const render_id = ++analyze_page_render_id
+        analyze_page_document_controller?.abort()
+        const document_controller = new AbortController()
+        analyze_page_document_controller = document_controller
+        const document_listener_options = { signal: document_controller.signal }
+        const is_stale_render = () => render_id !== analyze_page_render_id
+
         document.querySelector('.friend-rating-backdrop')?.remove()
         const $page = document.querySelector('.columns')
+        if (!$page) return
         $page.classList.add('鉴定_host')
 
-        if (!cur_user1 || !cur_user2) {
-            visited_username = document.querySelector('#headerProfile .name small').textContent.slice(1)
-            self_username = CHOBITS_USERNAME
-            if (!comparison_username) comparison_username = visited_username
-        }
-        if (force || !cur_user1 || !cur_user2) {
-            // 强制更新收藏缓存时同时刷新双方头像、昵称等用户资料
-            ;[cur_user1, cur_user2] = await Promise.all([
-                load_manager_async.get_user(comparison_username || visited_username, force),
-                load_manager_async.get_user(self_username, force),
-            ])
+        try {
+            if (!cur_user1 || !cur_user2) {
+                visited_username = document.querySelector('#headerProfile .name small')?.textContent?.slice(1) || ''
+                self_username = get_logged_in_username()
+                if (!comparison_username) comparison_username = visited_username
+            }
+            if (!isValidUsernameInput(self_username)) throw new Error('需要登录后才能使用 Shadow 对比')
+            if (!isValidUsernameInput(comparison_username || visited_username)) throw new Error('当前用户名无效')
+            if (force || !cur_user1 || !cur_user2) {
+                // 强制更新收藏缓存时同时刷新双方头像、昵称等用户资料
+                const [next_user1, next_user2] = await Promise.all([
+                    load_manager_async.get_user(comparison_username || visited_username, force),
+                    load_manager_async.get_user(self_username, force),
+                ])
+                if (is_stale_render()) return
+                cur_user1 = next_user1
+                cur_user2 = next_user2
+            }
+        } catch (error) {
+            if (is_stale_render()) return
+            $page.innerHTML = `<section class="鉴定_page" style="padding:20px;color:red;">错误: ${escapeHtml(error.message || error)}</section>`
+            throw error
         }
         mark_opponent_viewed(cur_user1.username)
 
         const my_id = cur_user2.username
         const his_id = cur_user1.username
-        const my_avatar = cur_user2.avatar.medium
-        const his_avatar = cur_user1.avatar.medium
+        const my_avatar = escapeHtml(cur_user2.avatar?.medium || '')
+        const his_avatar = escapeHtml(cur_user1.avatar?.medium || '')
 
         try {
             $page.innerHTML = `<section class="鉴定_page" style="padding: 20px;">加载中...</section>`
 
             await sync_threshold_profile()
+            if (is_stale_render()) return
             const result = await analyze.run(my_id, his_id, force)
+            if (is_stale_render()) return
 
             const SET_MODE_DEFS = {
                 any: '不限制',
@@ -2444,7 +2502,7 @@
                 const public_hidden = review.public_hidden ?? null
                 return `
                 <div class="_compact_card${important_subject_ids.has(Number(review.subject.id)) ? ' __important' : ''}${review._section_muted ? ' __section_muted' : ''}" data-subject-id="${Number(review.subject.id)}" data-subject-url="/subject/${Number(review.subject.id)}">
-                    <img src="${review.subject.images?.grid || ''}" loading="lazy"/>
+                    <img src="${escapeHtml(review.subject.images?.grid || '')}" loading="lazy"/>
                     <div class="_compact_scores _compact_user_scores">
                         ${review.my_review ? `
                         <span class="_compact_score __${my_score_level}" title="我的评分：原始 ${my_rate || '-'} / 隐藏 ${my_hidden ?? '-'}">
@@ -3183,6 +3241,7 @@
                 </div>
             </main>`
 
+            if (is_stale_render()) return
             $page.innerHTML = page_html
 
             renderBmoji()
@@ -4820,7 +4879,7 @@
                     status.textContent = `添加失败：${error.message || error}`
                 }
             })
-            document.addEventListener('click', () => { opponentMenu.style.display = 'none' })
+            document.addEventListener('click', () => { opponentMenu.style.display = 'none' }, document_listener_options)
 
             // 手机端设置折叠与通用底部面板
             document.getElementById('mobile-settings-toggle').addEventListener('click', event => {
@@ -4834,7 +4893,7 @@
             })
             document.addEventListener('keydown', event => {
                 if (event.key === 'Escape') close_mobile_sheet()
-            })
+            }, document_listener_options)
             document.getElementById('mobile-sort-manage').addEventListener('click', () => {
                 const sort_key = analyze_config.current_sort
                 if (sort_key.startsWith('custom:')) {
@@ -4910,7 +4969,7 @@
             hidden_score_overlay.addEventListener('click', event => event.stopPropagation())
             document.addEventListener('click', () => {
                 hidden_score_container.classList.remove('is-open')
-            })
+            }, document_listener_options)
             hidden_score_overlay.querySelectorAll('.hidden-chart-point').forEach(point => {
                 point.addEventListener('mouseenter', event => {
                     const rate = Number(event.currentTarget.dataset.rate)
@@ -5144,7 +5203,7 @@
                     return
                 }
             })
-            document.addEventListener('click', () => { cloud_sync_menu.style.display = 'none' })
+            document.addEventListener('click', () => { cloud_sync_menu.style.display = 'none' }, document_listener_options)
 
             // ── 评分分段滑块 ──
 
@@ -5326,7 +5385,7 @@
             document.addEventListener('click', async () => {
                 if (subjectTypeMenu.style.display === 'none') return
                 await apply_subject_type_selection()
-            })
+            }, document_listener_options)
 
             // 反馈链接
             document.getElementById('feedback-link').addEventListener('click', (e) => {
@@ -5336,6 +5395,7 @@
             })
 
         } catch (e) {
+            if (is_stale_render()) return
             $page.innerHTML = `<section class="鉴定_page" style="padding: 20px; color: red;">错误: ${escapeHtml(String(e))}</section>`
             throw e
         }
@@ -5345,6 +5405,12 @@
 
     {
         const $navTabs = document.querySelector('.navTabs')
+        if (!$navTabs) return
+        if (!get_logged_in_username()) {
+            const $login_notice = create_element(`<li><a href="/login" title="登录后可使用 Shadow 对比">${TITLE}（需登录）</a></li>`)
+            $navTabs.append($login_notice)
+            return
+        }
         const $btn = create_element(`<li><a href="javascript:">${TITLE}</a></li>`)
 
         $btn.addEventListener('click', () => {
@@ -5352,7 +5418,9 @@
                 $focus.classList.remove('focus')
             }
             $btn.querySelector('a').classList.add('focus')
-            inject_analyze_page()
+            inject_analyze_page().catch(error => {
+                console.error('[Shadow] 分析页加载失败', error)
+            })
         })
 
         $navTabs.append($btn)

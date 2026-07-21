@@ -52,6 +52,7 @@
     order: 0,
     items: [],
     seen: new Set(),
+    lastErrors: [],
     page: {
       say: 1,
       blog: 1,
@@ -104,6 +105,15 @@
         border-radius: 10px;
         background: rgba(0, 0, 0, .04);
         color: #888;
+      }
+      .air-timeline-combo-warning {
+        display: block;
+        margin-bottom: 8px;
+        color: #b06a00;
+        font-size: 12px;
+      }
+      html[data-theme=dark] .air-timeline-combo-warning {
+        color: #e0a84c;
       }
     `;
     document.head.appendChild(style);
@@ -199,6 +209,7 @@
     state.order = 0;
     state.items = [];
     state.seen = new Set();
+    state.lastErrors = [];
     state.page = {
       say: 1,
       blog: 1,
@@ -219,48 +230,77 @@
 
   async function loadNextBatch() {
     state.loading = true;
+    state.lastErrors = [];
     try {
-      const tasks = [];
-      tasks.push(...makeFetchTasks('say', BATCH_PAGES.say));
-      tasks.push(...makeFetchTasks('blog', BATCH_PAGES.blog));
-      tasks.push(...makeFetchTasks('subject', BATCH_PAGES.subject));
-
-      const results = await Promise.allSettled(tasks.map((task) => fetchTimelineItems(task.type, task.page)));
+      const results = await Promise.all(
+        Object.entries(BATCH_PAGES).map(([type, count]) => loadTypeBatch(type, count)),
+      );
+      let attemptedPages = 0;
+      let successfulPages = 0;
 
       for (const result of results) {
-        if (result.status !== 'fulfilled') continue;
-        for (const item of result.value) {
+        attemptedPages += result.attemptedPages;
+        successfulPages += result.successfulPages;
+        if (result.error) state.lastErrors.push({ type: result.type, error: result.error });
+        for (const item of result.items) {
           if (item.type === 'subject' && !hasSubjectComment(item.li)) continue;
           addItem(item);
         }
       }
 
+      if (attemptedPages > 0 && successfulPages === 0 && state.lastErrors.length) {
+        throw new Error(state.lastErrors.map(({ type, error }) => `${type}: ${error.message || error}`).join('; '));
+      }
       sortItems();
     } finally {
       state.loading = false;
     }
   }
 
-  function makeFetchTasks(type, count) {
-    const tasks = [];
+  async function loadTypeBatch(type, count) {
+    const result = {
+      type,
+      items: [],
+      attemptedPages: 0,
+      successfulPages: 0,
+      error: null,
+    };
     for (let i = 0; i < count; i++) {
       const page = state.page[type];
       if (page > MAX_PAGE[type]) break;
-      tasks.push({ type, page });
-      state.page[type] += 1;
+      result.attemptedPages += 1;
+      try {
+        const items = await fetchTimelineItems(type, page);
+        result.items.push(...items);
+        result.successfulPages += 1;
+        state.page[type] += 1;
+      } catch (error) {
+        result.error = error;
+        break;
+      }
     }
-    return tasks;
+    return result;
   }
 
   async function fetchTimelineItems(type, page) {
     const url = buildTimelineUrl(type, page);
-    const response = await fetch(url, {
-      credentials: 'same-origin',
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
 
-    const html = await response.text();
-    return parseTimelineHtml(html, type, page);
+      const html = await response.text();
+      return parseTimelineHtml(html, type, page);
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error(`请求超时：${type} 第 ${page} 页`);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function buildTimelineUrl(type, page) {
@@ -470,6 +510,14 @@
 
     const pager = document.createElement('div');
     pager.className = 'page_inner air-timeline-combo-pager';
+
+    if (state.lastErrors.length) {
+      const labels = { say: '吐槽', blog: '日志', subject: '收藏' };
+      const warning = document.createElement('span');
+      warning.className = 'air-timeline-combo-warning';
+      warning.textContent = `部分内容加载失败（${state.lastErrors.map(({ type }) => labels[type] || type).join('、')}），点击“再来点”重试。`;
+      pager.appendChild(warning);
+    }
 
     const a = document.createElement('a');
     a.href = 'javascript:void(0);';
