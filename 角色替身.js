@@ -21,7 +21,6 @@
     const REFRESH_CONFIG_KEY = 'va_role_lookup_refresh_cache'
     const IMPORTANT_ROLES_CONFIG_KEY = 'va_role_lookup_important_roles_v1'
     const IMPORTANT_ROLES_LOCAL_KEY = 'bangumi_va_role_lookup_important_roles_v1'
-    const SHOW_SPOILER_ROLES_KEY = 'bangumi_va_role_lookup_show_spoiler_roles'
     const NO_IMAGE = 'https://bgm.tv/img/info_only.png'
     const PRODUCTION_ROLE_PRIORITIES = {
         1: [
@@ -76,7 +75,6 @@
         role_actor_names_complete: new Set(),
         selected_actor_id: '',
         selected_character_id: '',
-        selected_character: null,
         selected_production_key: '',
         request_serial: 0,
         refresh_value: 'idle',
@@ -86,26 +84,6 @@
         current_character_actors: new Map(),
         actor_by_id: new Map(),
         current_panel: null,
-        show_spoiler_roles: load_spoiler_roles_setting(),
-    }
-
-    function load_spoiler_roles_setting() {
-        try {
-            return localStorage.getItem(SHOW_SPOILER_ROLES_KEY) === 'on'
-        } catch (error) {
-            console.warn('[角色替身] 读取剧透设置失败', error)
-            return false
-        }
-    }
-
-    function save_spoiler_roles_setting(value) {
-        try {
-            localStorage.setItem(SHOW_SPOILER_ROLES_KEY, value ? 'on' : 'off')
-            return true
-        } catch (error) {
-            console.warn('[角色替身] 保存剧透设置失败', error)
-            return false
-        }
     }
 
     function pr(req) {
@@ -896,37 +874,26 @@
             return
         }
 
-        const reveal_spoilers = state.show_spoiler_roles
         const grid = create_element('<div class="va-role-lookup-grid"></div>')
         for (const role of roles) {
             const card = document.createElement('a')
-            card.className = reveal_spoilers ? 'va-role-lookup-card' : 'va-role-lookup-card is-spoiler-hidden'
+            card.className = 'va-role-lookup-card'
             card.href = `/character/${role.id}`
-            if (reveal_spoilers) {
-                card.title = build_role_title(role)
-            } else {
-                card.title = ''
-                card.addEventListener('click', event => {
-                    event.preventDefault()
-                    set_status('请先开启“显示剧透角色”')
-                })
-            }
+            card.title = build_role_title(role)
 
             const avatar = document.createElement('span')
             avatar.className = 'va-role-lookup-avatar avatarNeue avatarCoverPortrait avatarTop'
-            if (reveal_spoilers) avatar.style.backgroundImage = `url("${role.image || NO_IMAGE}")`
+            avatar.style.backgroundImage = `url("${role.image || NO_IMAGE}")`
 
             const name = document.createElement('span')
             name.className = 'va-role-lookup-role-name'
-            name.textContent = reveal_spoilers ? display_cn_name(role) : '剧透角色'
+            name.textContent = display_cn_name(role)
 
-            if (reveal_spoilers) {
-                card.addEventListener('mouseenter', () => hydrate_role_actor_names(role, card), { once: true })
-                card.addEventListener('focus', () => hydrate_role_actor_names(role, card), { once: true })
-            }
+            card.addEventListener('mouseenter', () => hydrate_role_actor_names(role, card), { once: true })
+            card.addEventListener('focus', () => hydrate_role_actor_names(role, card), { once: true })
 
             card.append(avatar, name)
-            if (reveal_spoilers && options.action === 'toggle-important' && options.actor) {
+            if (options.action === 'toggle-important' && options.actor) {
                 const important = options.importantSet?.has(role.key)
                 const button = document.createElement('button')
                 button.type = 'button'
@@ -1193,7 +1160,6 @@
     async function select_character(panel, character, force = false) {
         if (!character?.id) return
         state.selected_character_id = character.id
-        state.selected_character = character
         set_active_character(panel, character.id)
         const body = panel.querySelector('.va-role-lookup-result')
         const serial = ++state.request_serial
@@ -1340,25 +1306,6 @@
             const first_character = render_voice_left(panel, characters)
             if (first_character) select_character(panel, first_character)
         } else render_production_left(panel)
-    }
-
-    function update_spoiler_toggle(host) {
-        const button = host?.querySelector('.va-role-lookup-spoiler-toggle')
-        if (!button) return
-        button.classList.toggle('is-active', state.show_spoiler_roles)
-        button.setAttribute('aria-pressed', String(state.show_spoiler_roles))
-        button.textContent = state.show_spoiler_roles ? '隐藏剧透角色' : '显示剧透角色'
-    }
-
-    function set_spoiler_roles_visible(value) {
-        state.show_spoiler_roles = !!value
-        const saved = save_spoiler_roles_setting(state.show_spoiler_roles)
-        const panel = state.current_panel
-        update_spoiler_toggle(panel?.closest('.va-role-lookup-host'))
-        if (panel && state.mode === 'voice' && state.selected_character) {
-            select_character(panel, state.selected_character)
-        }
-        if (!saved) set_status('剧透显示设置仅在当前页面生效')
     }
 
     function reset_runtime_cache() {
@@ -1527,10 +1474,6 @@
             .va-role-lookup-small-empty { min-height:40px; justify-content:flex-start; }
             .va-role-lookup-card { position:relative; display:flex; flex-direction:column; gap:4px; min-width:0; text-decoration:none; color:inherit; }
             .va-role-lookup-card:hover .va-role-lookup-role-name { color:#c45; }
-            .va-role-lookup-card.is-spoiler-hidden { cursor:default; }
-            .va-role-lookup-card.is-spoiler-hidden .va-role-lookup-avatar { background:repeating-linear-gradient(135deg, rgba(196,68,85,.16), rgba(196,68,85,.16) 6px, rgba(127,127,127,.12) 6px, rgba(127,127,127,.12) 12px); }
-            .va-role-lookup-card.is-spoiler-hidden .va-role-lookup-role-name { color:#999; }
-            .va-role-lookup-card.is-spoiler-hidden:hover .va-role-lookup-role-name { color:#999; }
             .va-role-lookup-important-toggle { position:absolute; top:0; right:0; width:28px; height:28px; border:1px solid rgba(0,0,0,.2); border-radius:999px; background:rgba(255,255,255,.94); cursor:pointer; font-size:21px; line-height:24px; font-weight:700; padding:0; text-align:center; box-shadow:0 1px 4px rgba(0,0,0,.2); }
             .va-role-lookup-important-toggle[data-action="add"] { color:#d64a76; border-color:rgba(214,74,118,.55); }
             .va-role-lookup-important-toggle[data-action="remove"] { color:#3478d4; border-color:rgba(52,120,212,.55); }
@@ -1538,6 +1481,7 @@
             .va-role-lookup-avatar { display:block; width:72px; height:96px; margin:0 auto; border-radius:3px; box-shadow:0 1px 3px rgba(0,0,0,.16); image-rendering:auto !important; }
             .va-role-lookup-role-name { display:block; min-height:2.4em; color:#555; font-size:12px; line-height:1.2; text-align:center; word-break:break-word; overflow:hidden; }
             html[data-theme=dark] .va-role-lookup-toggle { background:#333; color:#ddd; border-color:#555; }
+            html[data-theme=dark] .va-role-lookup-toggle.is-active { background:rgba(255,128,160,.2); color:#ff9ab3; border-color:rgba(255,154,179,.72); box-shadow:inset 0 0 0 1px rgba(255,154,179,.08); }
             html[data-theme=dark] .va-role-lookup-panel { background:rgba(42,42,42,.82); border-color:#555; }
             html[data-theme=dark] .va-role-lookup-left { border-right-color:#555; }
             html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title, html[data-theme=dark] .va-role-lookup-role-group-title { color:#ddd; }
@@ -1547,7 +1491,6 @@
             html[data-theme=dark] .va-role-lookup-actor-link { background:rgba(255,128,160,.18); }
             html[data-theme=dark] .va-role-lookup-actor-link:hover, html[data-theme=dark] .va-role-lookup-actor-link:focus { background:rgba(255,128,160,.32); color:#fff; }
             html[data-theme=dark] .va-role-lookup-role-name { color:#ddd; }
-            html[data-theme=dark] .va-role-lookup-card.is-spoiler-hidden .va-role-lookup-role-name, html[data-theme=dark] .va-role-lookup-card.is-spoiler-hidden:hover .va-role-lookup-role-name { color:#aaa; }
             html[data-theme=dark] .va-role-lookup-important-toggle { background:rgba(42,42,42,.92); border-color:#666; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="add"] { color:#ff9ab3; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="remove"] { color:#7eb0ff; }
@@ -1573,7 +1516,6 @@
             <div class="va-role-lookup-toolbar">
                 ${has_voice_mode ? '<button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="voice" aria-expanded="false">角色替身</button>' : ''}
                 <button type="button" class="va-role-lookup-toggle va-role-lookup-mode" data-mode="production" aria-expanded="false">制作替身</button>
-                ${has_voice_mode ? '<button type="button" class="va-role-lookup-toggle va-role-lookup-spoiler-toggle" aria-pressed="false">显示剧透角色</button>' : ''}
                 <span class="va-role-lookup-status"></span>
             </div>
         `)
@@ -1592,10 +1534,6 @@
         if (has_voice_mode) render_voice_left(panel, characters)
         state.current_panel = panel
 
-        toolbar.querySelector('.va-role-lookup-spoiler-toggle')?.addEventListener('click', () => {
-            set_spoiler_roles_visible(!state.show_spoiler_roles)
-        })
-
         toolbar.querySelectorAll('.va-role-lookup-mode').forEach(button => {
             button.addEventListener('click', event => {
                 const next_mode = event.currentTarget.dataset.mode
@@ -1611,7 +1549,6 @@
         })
         const more = section.querySelector(':scope > a.more')
         host.append(toolbar, panel)
-        update_spoiler_toggle(host)
         if (more) more.before(host)
         else if (section === document.body) document.body.prepend(host)
         else section.append(host)
