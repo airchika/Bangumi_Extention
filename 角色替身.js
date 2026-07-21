@@ -16,53 +16,50 @@
     const DB_NAME = 'bangumi_va_role_lookup_v1'
     const STORE_NAME = 'store'
     const CACHE_TTL = 12 * 60 * 60 * 1000
-    const SUBJECT_TYPES = [1, 2, 4]
+    const SUBJECT_TYPES = [1, 2, 3, 4]
     const ROLE_SUBJECT_TYPES = [2, 4]
     const REFRESH_CONFIG_KEY = 'va_role_lookup_refresh_cache'
     const IMPORTANT_ROLES_CONFIG_KEY = 'va_role_lookup_important_roles_v1'
     const IMPORTANT_ROLES_LOCAL_KEY = 'bangumi_va_role_lookup_important_roles_v1'
     const SHOW_SPOILER_ROLES_KEY = 'bangumi_va_role_lookup_show_spoiler_roles'
     const NO_IMAGE = 'https://bgm.tv/img/info_only.png'
-    const ANIME_PRODUCTION_GROUPS = [{
-        id: 'animation',
-        label: '动画制作',
-        keywords: ['动画制作', 'アニメーション制作', 'アニメ制作'],
-    }, {
-        id: 'original',
-        label: '原作',
-        keywords: ['原作'],
-    }, {
-        id: 'director',
-        label: '导演',
-        keywords: ['导演', '監督'],
-        exclude: ['副导演', '副監督', '副监督'],
-    }, {
-        id: 'script',
-        label: '脚本',
-        keywords: ['脚本', '脚本協力', '系列构成', 'シリーズ構成'],
-    }, {
-        id: 'storyboard',
-        label: '分镜',
-        keywords: ['分镜', '絵コンテ'],
-    }, {
-        id: 'episode-direction',
-        label: '演出',
-        keywords: ['演出'],
-    }]
-    const GAME_PRODUCTION_GROUPS = [{
-        id: 'developer',
-        label: '开发',
-        keywords: ['开发', '開發', '开发商', '开发公司', '開発', 'Developer', 'developer', 'development'],
-    }]
-    const BOOK_PRODUCTION_GROUPS = [{
-        id: 'author',
-        label: '作者',
-        keywords: ['作者', '著者'],
-    }, {
-        id: 'illustration',
-        label: '插图',
-        keywords: ['插图', '插圖', '插画', '插畫', 'イラスト'],
-    }]
+    const PRODUCTION_ROLE_PRIORITIES = {
+        1: [
+            ['作者', '著者', '原作'],
+            ['作画', '漫画'],
+            ['插画', '插图', '插畫', '插圖', 'イラスト'],
+            ['出版社', '出版'],
+        ],
+        2: [
+            ['动画制作', 'アニメーション制作', 'アニメ制作'],
+            ['原作'],
+            ['导演', '监督', '監督'],
+            ['系列构成', 'シリーズ構成'],
+            ['脚本'],
+            ['分镜', '絵コンテ'],
+            ['演出'],
+            ['人物设定', '人物設定', '角色设计', '角色設計', '人设', 'キャラクターデザイン'],
+            ['音乐', '音楽'],
+        ],
+        3: [
+            ['艺术家', '藝術家', 'アーティスト'],
+            ['作词', '作詞'],
+            ['作曲'],
+            ['编曲', '編曲'],
+            ['演奏'],
+            ['制作人', 'プロデューサー'],
+            ['厂牌', '廠牌', 'レーベル'],
+        ],
+        4: [
+            ['开发', '開發', '开发商', '開発', 'Developer', 'developer'],
+            ['发行', '發行', '发行商', '發行商', 'パブリッシャー', 'Publisher', 'publisher'],
+            ['导演', '监督', '監督'],
+            ['制作人', 'プロデューサー'],
+            ['剧本', '劇本', '脚本', 'シナリオ'],
+            ['人物设定', '人物設定', '角色设计', '角色設計', '人设', 'キャラクターデザイン'],
+            ['音乐', '音楽'],
+        ],
+    }
     const state = {
         subject_id: Number(location.pathname.match(/^\/subject\/(\d+)/)?.[1] || 0),
         subject_type: 0,
@@ -168,6 +165,17 @@
                 transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存清理已中止')) }
             })
         },
+
+        async clear() {
+            const db = await open_db()
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(STORE_NAME, 'readwrite')
+                transaction.objectStore(STORE_NAME).clear()
+                transaction.oncomplete = () => { db.close(); resolve() }
+                transaction.onerror = () => { db.close(); reject(transaction.error) }
+                transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存清理已中止')) }
+            })
+        },
     }
 
     function get_username() {
@@ -218,6 +226,50 @@
         }
     }
 
+    function subject_type_from_page() {
+        const subject_type = String(document.querySelector('#headerSubject')?.getAttribute('typeof') || '')
+        const microdata_types = { 'v:Book': 1, 'v:Anime': 2, 'v:Music': 3, 'v:Game': 4 }
+        if (microdata_types[subject_type]) return microdata_types[subject_type]
+
+        for (const link of document.querySelectorAll('#navMenuNeue a.focus, #navMenuNeue .focus a, #headerNeue2 a.focus, #headerNeue2 .focus a')) {
+            const path = new URL(link.getAttribute('href') || '', location.origin).pathname
+            if (/^\/book\/?$/.test(path)) return 1
+            if (/^\/anime\/?$/.test(path)) return 2
+            if (/^\/music\/?$/.test(path)) return 3
+            if (/^\/game\/?$/.test(path)) return 4
+        }
+
+        const labels = new Set([...document.querySelectorAll('#infobox .tip')]
+            .map(tip => tip.textContent.replace(/[：:]\s*$/, '').trim()))
+        if (['游戏类型', '游玩人数', '平台'].some(label => labels.has(label))) return 4
+        if (['放送开始', '播放电视台', '话数'].some(label => labels.has(label))) return 2
+        if (['ISBN', '页数', '出版社'].some(label => labels.has(label))) return 1
+        if (['艺术家', '碟片数量', '版本特性'].some(label => labels.has(label))) return 3
+        return 0
+    }
+
+    function read_subject_persons_from_page() {
+        const people = []
+        const seen = new Set()
+        for (const row of document.querySelectorAll('#infobox > li')) {
+            const relation = String(row.querySelector(':scope > .tip')?.textContent || '')
+                .replace(/[：:]\s*$/, '').trim()
+            if (!relation) continue
+            for (const link of row.querySelectorAll(':scope > a[href*="/person/"]')) {
+                const id = parse_numeric_id(link.getAttribute('href'), 'person')
+                const key = `${relation}:${id}`
+                if (!id || seen.has(key)) continue
+                seen.add(key)
+                people.push({
+                    id: Number(id),
+                    name: link.textContent.trim() || `person/${id}`,
+                    relation,
+                })
+            }
+        }
+        return people
+    }
+
     function image_from(images) {
         return images?.medium || images?.large || images?.small || images?.grid || ''
     }
@@ -258,6 +310,21 @@
         const worker_count = Math.min(Math.max(1, limit), items.length)
         await Promise.all(Array.from({ length: worker_count }, worker))
         return results
+    }
+
+    function fetch_text(url, options = {}, timeout = 12000) {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), timeout)
+        return fetch(url, { ...options, signal: controller.signal }).then(async response => {
+            clearTimeout(timer)
+            const text = await response.text()
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            return text
+        }, error => {
+            clearTimeout(timer)
+            if (error.name === 'AbortError') throw new Error('请求超时')
+            throw error
+        })
     }
 
     function has_cloud_settings() {
@@ -435,12 +502,26 @@
         return detail
     }
 
-    async function get_character_persons(character_id, force = false) {
-        const key = `character-persons:${character_id}`
+    async function get_character_primary_persons(character_id, force = false) {
+        const key = `character-primary-persons:${character_id}`
         let persons = force ? null : await cache.get(key)
         if (!persons) {
-            persons = await fetch_json(`https://api.bgm.tv/v0/characters/${character_id}/persons`)
-            if (!Array.isArray(persons)) throw new Error('角色人物响应格式无效')
+            const html = await fetch_text(`/character/${character_id}`)
+            const doc = new DOMParser().parseFromString(html, 'text/html')
+            const seen = new Set()
+            persons = []
+            for (const badge of doc.querySelectorAll('li.badge_actor')) {
+                const relation_type = badge.getAttribute('attr-rlt-type')
+                const relation_name = badge.getAttribute('att-rlt-type-name')
+                    || badge.getAttribute('attr-rlt-type-name')
+                if (relation_type !== '0' && relation_name !== 'CV') continue
+                const link = badge.querySelector('h3 a[href*="/person/"]')
+                const id = parse_numeric_id(link?.getAttribute('href'), 'person')
+                if (!id || seen.has(id)) continue
+                seen.add(id)
+                persons.push({ id: Number(id), name: link.textContent.trim() || `person/${id}` })
+            }
+            if (!persons.length) throw new Error('角色页面没有找到日配声优')
             await cache.set(key, persons)
         }
         return persons
@@ -458,6 +539,10 @@
     }
 
     async function get_subject_persons(subject_id, force = false) {
+        if (Number(subject_id) === state.subject_id) {
+            const page_persons = read_subject_persons_from_page()
+            if (page_persons.length) return page_persons
+        }
         const key = `subject-persons:${subject_id}`
         let persons = force ? null : await cache.get(key)
         if (!persons) {
@@ -484,8 +569,9 @@
         const subject_type = Number(collection?.subject_type)
         const book = { 1: '想读', 2: '读过', 3: '在读', 4: '搁置', 5: '抛弃' }
         const anime = { 1: '想看', 2: '看过', 3: '在看', 4: '搁置', 5: '抛弃' }
+        const music = { 1: '想听', 2: '听过', 3: '在听', 4: '搁置', 5: '抛弃' }
         const game = { 1: '想玩', 2: '玩过', 3: '在玩', 4: '搁置', 5: '抛弃' }
-        const labels = subject_type === 1 ? book : subject_type === 4 ? game : anime
+        const labels = subject_type === 1 ? book : subject_type === 3 ? music : subject_type === 4 ? game : anime
         return labels[type] || '已收藏'
     }
 
@@ -494,27 +580,27 @@
         return order[Number(collection?.type)] ?? 9
     }
 
-    function relation_matches(relation, group) {
-        const text = String(relation || '').trim()
-        if (!text) return false
-        const tokens = text.split(/[、，,／/・＆&]+/).map(token => token.trim()).filter(Boolean)
-        const values = tokens.length ? tokens : [text]
-        if (group.exclude?.some(keyword => values.includes(keyword))) return false
-        return group.keywords.some(keyword => values.includes(keyword))
-    }
-
-    function production_groups_for_subject_type(subject_type = state.subject_type) {
-        if (Number(subject_type) === 1) return BOOK_PRODUCTION_GROUPS
-        if (Number(subject_type) === 4) return GAME_PRODUCTION_GROUPS
-        return ANIME_PRODUCTION_GROUPS
-    }
-
     function production_labels_for_relation(relation) {
-        const labels = []
-        for (const group of production_groups_for_subject_type()) {
-            if (relation_matches(relation, group)) labels.push(group.label)
-        }
-        return labels
+        const text = String(relation || '').trim()
+        if (!text) return []
+        return [...new Set(text
+            .split(/[、，,／/・＆&]+/)
+            .map(label => label.trim())
+            .filter(Boolean))]
+    }
+
+    function production_role_priority(label, subject_type) {
+        const groups = PRODUCTION_ROLE_PRIORITIES[Number(subject_type)] || []
+        const index = groups.findIndex(aliases => aliases.includes(label))
+        return index < 0 ? groups.length : index
+    }
+
+    function sort_production_groups(groups, subject_type) {
+        return groups
+            .map((group, index) => ({ group, index }))
+            .sort((a, b) => production_role_priority(a.group.label, subject_type)
+                - production_role_priority(b.group.label, subject_type) || a.index - b.index)
+            .map(item => item.group)
     }
 
     function role_key(role) {
@@ -613,12 +699,16 @@
     }
 
     function build_role_title(role) {
-        const works = role.works?.length ? role.works.map(work => work.name).join(' / ') : '暂无'
-        return [
+        const lines = [
             `日语名：${display_origin_name(role)}`,
             `声优：${role_actor_label(role)}`,
-            `出演作品：${works}`,
-        ].join('\n')
+        ]
+        if (role.works?.length) {
+            lines.push('出演作品：', ...role.works.map(work => `  ${work.name}`))
+        } else {
+            lines.push('出演作品：暂无')
+        }
+        return lines.join('\n')
     }
 
     async function hydrate_role_actor_names(role, card) {
@@ -629,7 +719,7 @@
             return
         }
         try {
-            const persons = await get_character_persons(role.id)
+            const persons = await get_character_primary_persons(role.id)
             role.actor_names = cache_full_role_actor_names(role, persons)
             role.actor_names_loaded = true
             card.title = build_role_title(role)
@@ -699,10 +789,10 @@
         return role.name || role.name_cn || `角色 ${role.id}`
     }
 
-    function find_character_section() {
-        const sections = [...document.querySelectorAll('.subject_section')]
+    function find_character_section(root = document) {
+        const sections = [...root.querySelectorAll('.subject_section')]
         return sections.find(section => section.querySelector('h2.subtitle')?.textContent?.trim().includes('角色介绍'))
-            || document.querySelector('#browserItemList')?.closest('.subject_section')
+            || root.querySelector('#browserItemList')?.closest('.subject_section')
     }
 
     function find_subject_panel_host() {
@@ -721,21 +811,34 @@
         const by_id = new Map()
         const character_by_id = new Map()
         const current_character_actors = new Map()
-        for (const li of section.querySelectorAll('li.item')) {
-            const character_link = li.querySelector('a[href*="/character/"].title, p.title a[href*="/character/"]')
+        for (const li of section.querySelectorAll('.item')) {
+            const character_link = li.querySelector('a[href*="/character/"].title, p.title a[href*="/character/"], h2 > a[href*="/character/"]')
             const current_character_id = parse_numeric_id(character_link?.getAttribute('href'), 'character')
             if (!current_character_id) continue
             const thumb = li.querySelector('a.thumbTip[href*="/character/"]')
+            const cn_tip = li.querySelector('h2 .tip')
             const character = character_by_id.get(current_character_id) || {
                 id: current_character_id,
                 name: character_link?.textContent?.trim() || `角色 ${current_character_id}`,
-                name_cn: thumb?.getAttribute('data-original-title')?.trim() || thumb?.getAttribute('title')?.trim() || character_link?.textContent?.trim() || `角色 ${current_character_id}`,
+                name_cn: thumb?.getAttribute('data-original-title')?.trim()
+                    || thumb?.getAttribute('title')?.trim()
+                    || cn_tip?.textContent?.trim()
+                    || character_link?.textContent?.trim()
+                    || `角色 ${current_character_id}`,
                 actors: [],
             }
             character_by_id.set(current_character_id, character)
             if (!characters.includes(character)) characters.push(character)
 
-            for (const link of li.querySelectorAll('p.badge_actor a[href*="/person/"]')) {
+            for (const link of li.querySelectorAll('p.badge_actor a[href*="/person/"], .actorBadge p a[href*="/person/"], li.badge_actor h3 a[href*="/person/"]')) {
+                const badge = link.closest('.actorBadge, .badge_actor')
+                const relation_type = badge?.getAttribute('attr-rlt-type')
+                const relation_name = badge?.getAttribute('att-rlt-type-name')
+                    || badge?.getAttribute('attr-rlt-type-name')
+                if (relation_type !== null && relation_type !== '0') continue
+                if (relation_type === null && relation_name && relation_name !== 'CV') continue
+                const primary = badge?.getAttribute('attr-rlt-primary') || badge?.getAttribute('att-rlt-primary')
+                if (primary && primary !== '1') continue
                 const id = parse_numeric_id(link.getAttribute('href'), 'person')
                 if (!id) continue
                 const actor = by_id.get(id) || {
@@ -755,6 +858,29 @@
             }
         }
         return { actors, characters, current_character_actors }
+    }
+
+    async function read_full_subject_characters() {
+        const html = await fetch_text(`/subject/${state.subject_id}/characters`)
+        const doc = new DOMParser().parseFromString(html, 'text/html')
+        const section = doc.querySelector('#browserItemList') || find_character_section(doc) || doc
+        const result = read_actors(section)
+        if (!result.characters.length) throw new Error('完整角色页没有找到角色')
+        return result
+    }
+
+    async function read_subject_characters(character_section) {
+        const current = character_section
+            ? read_actors(character_section)
+            : { actors: [], characters: [], current_character_actors: new Map() }
+        if (state.subject_type === 1) return current
+        try {
+            const full = await read_full_subject_characters()
+            return full.characters.length >= current.characters.length ? full : current
+        } catch (error) {
+            console.warn('[角色替身] 完整角色列表加载失败，使用当前页面角色', error)
+            return current
+        }
     }
 
     function set_status(text) {
@@ -867,29 +993,30 @@
         if (state.production_people_promise && !force) return state.production_people_promise
         state.production_people_promise = (async () => {
             const persons = await get_subject_persons(state.subject_id, force)
-            const grouped = production_groups_for_subject_type().map(group => ({ ...group, people: [] }))
+            const grouped = new Map()
             const seen = new Set()
 
             for (const person of persons) {
                 const person_id = Number(person.id)
                 if (!person_id) continue
                 const relation = String(person.relation || '')
-                for (const group of grouped) {
-                    if (!relation_matches(relation, group)) continue
-                    const key = `${group.id}:${person_id}`
+                const labels = production_labels_for_relation(relation)
+                for (const label of labels.length ? labels : ['其他']) {
+                    if (!grouped.has(label)) grouped.set(label, { id: label, label, people: [] })
+                    const key = `${label}:${person_id}`
                     if (seen.has(key)) continue
                     seen.add(key)
-                    group.people.push({
+                    grouped.get(label).people.push({
                         key,
                         id: String(person_id),
                         name: String(person.name || `person/${person_id}`),
                         relation,
-                        group_id: group.id,
-                        group_label: group.label,
+                        group_id: label,
+                        group_label: label,
                     })
                 }
             }
-            return grouped
+            return sort_production_groups([...grouped.values()], state.subject_type)
         })()
         state.production_people_promise.catch(() => {
             state.production_people_promise = null
@@ -923,7 +1050,7 @@
             const subject_id = Number(subject.id)
             const subject_type = Number(subject.type)
             if (!SUBJECT_TYPES.includes(subject_type) || !collection_index.has(subject_id)) continue
-            const staff_groups = production_labels_for_relation(subject.staff || person.relation)
+            const staff_groups = production_labels_for_relation(subject.staff)
             if (!staff_groups.length) continue
             const normalized = normalize_subject(subject, collection_index.get(subject_id), person, staff_groups)
             const existing = by_subject.get(subject_id)
@@ -953,7 +1080,7 @@
     function render_subject_cards(container, subjects) {
         container.textContent = ''
         if (!subjects.length) {
-            container.append(create_element('<div class="va-role-lookup-empty">自己的动画/游戏收藏中没有找到该作者参与的条目。</div>'))
+            container.append(create_element('<div class="va-role-lookup-empty">自己的动画、书籍、音乐或游戏收藏中没有找到该制作人员参与的条目。</div>'))
             return
         }
 
@@ -985,7 +1112,7 @@
     function render_subject_sections(container, subjects) {
         container.textContent = ''
         if (!subjects.length) {
-            container.append(create_element('<div class="va-role-lookup-empty">自己的动画/游戏收藏中没有找到该作者参与的条目。</div>'))
+            container.append(create_element('<div class="va-role-lookup-empty">自己的动画、书籍、音乐或游戏收藏中没有找到该制作人员参与的条目。</div>'))
             return
         }
         const groups = new Map()
@@ -995,12 +1122,14 @@
                 groups.get(key).push(subject)
             }
         }
-        const ordered_groups = [...groups.entries()].sort((a, b) => {
-            const production_groups = production_groups_for_subject_type()
-            const a_index = production_groups.findIndex(group => group.label === a[0])
-            const b_index = production_groups.findIndex(group => group.label === b[0])
-            return (a_index < 0 ? 99 : a_index) - (b_index < 0 ? 99 : b_index)
-        })
+        const ordered_groups = [...groups.entries()]
+            .map(([label, items], index) => ({ label, items, index }))
+            .sort((a, b) => {
+                const a_priority = Math.min(...a.items.map(item => production_role_priority(a.label, item.type)))
+                const b_priority = Math.min(...b.items.map(item => production_role_priority(b.label, item.type)))
+                return a_priority - b_priority || a.index - b.index
+            })
+            .map(({ label, items }) => [label, items])
         for (const [staff, items] of ordered_groups) {
             const section = document.createElement('section')
             section.className = 'va-role-lookup-result-section'
@@ -1081,8 +1210,13 @@
                 const section = document.createElement('section')
                 section.className = 'va-role-lookup-result-section'
                 const title = document.createElement('h3')
-                title.className = 'va-role-lookup-result-title'
-                title.textContent = actor.name
+                title.className = 'va-role-lookup-result-title va-role-lookup-actor-title'
+                const actor_link = document.createElement('a')
+                actor_link.className = 'va-role-lookup-actor-link'
+                actor_link.href = actor.href || `/person/${actor.id}`
+                actor_link.textContent = actor.name
+                actor_link.title = `查看 ${actor.name}`
+                title.append(actor_link)
                 const content = document.createElement('div')
                 content.className = 'va-role-lookup-section-content'
                 content.innerHTML = '<div class="va-role-lookup-loading">加载中...</div>'
@@ -1111,6 +1245,10 @@
         if (!person?.key) return
         state.selected_production_key = person.key
         set_active_production(panel, person.key)
+        const profile_link = panel.querySelector('.va-role-lookup-person-profile-link')
+        profile_link.href = `/person/${person.id}`
+        profile_link.title = `前往 ${person.name} 的人物页`
+        profile_link.setAttribute('aria-label', profile_link.title)
         const body = panel.querySelector('.va-role-lookup-result')
         const serial = ++state.request_serial
         body.innerHTML = '<div class="va-role-lookup-loading">加载中...</div>'
@@ -1223,13 +1361,7 @@
         if (!saved) set_status('剧透显示设置仅在当前页面生效')
     }
 
-    async function refresh_cache(force_status = true) {
-        const username = get_username()
-        if (!username) {
-            set_status('需要登录后才能刷新角色替身缓存')
-            return
-        }
-        if (force_status) set_status('正在刷新角色替身缓存...')
+    function reset_runtime_cache() {
         state.collection_promise = null
         state.collection_loaded_at = 0
         state.collection_index = null
@@ -1241,10 +1373,27 @@
         state.role_actor_names.clear()
         state.role_actor_names_complete.clear()
         seed_current_character_actor_names(state.current_character_actors)
+    }
+
+    async function clear_local_cache() {
+        reset_runtime_cache()
+        await cache.clear()
+        set_status('角色替身本地缓存已清除')
+    }
+
+    async function refresh_cache(force_status = true) {
+        const username = get_username()
+        if (!username) {
+            set_status('需要登录后才能刷新角色替身缓存')
+            return
+        }
+        if (force_status) set_status('正在刷新角色替身缓存...')
+        reset_runtime_cache()
         await get_collections(true)
         await cache.delete_prefix('person-characters:')
         await cache.delete_prefix('character:')
         await cache.delete_prefix('character-persons:')
+        await cache.delete_prefix('character-primary-persons:')
         await cache.delete_prefix('subject-persons:')
         await cache.delete_prefix('person-subjects:')
         if (force_status) set_status('角色替身缓存已刷新')
@@ -1294,6 +1443,38 @@
                         { value: 'refresh', label: '立即刷新' },
                     ],
                 })
+                if (chiiLib.ukagaka.addPanelTab) {
+                    chiiLib.ukagaka.addPanelTab({
+                        tab: 'va_role_lookup',
+                        label: '角色替身',
+                        type: 'custom',
+                        customContent: () => `
+                            <div class="va-role-lookup-cache-settings">
+                                <h3>本地缓存</h3>
+                                <p>清除角色、人物、条目和收藏查询缓存；不会删除已标记角色等个性化设置。</p>
+                                <button type="button" class="btnBlue va-role-lookup-clear-cache">清除本地缓存</button>
+                                <span class="va-role-lookup-clear-cache-status" style="margin-left:8px"></span>
+                            </div>
+                        `,
+                        onInit: (tab_selector, tab_content) => {
+                            tab_content.off('click', '.va-role-lookup-clear-cache').on('click', '.va-role-lookup-clear-cache', async function (event) {
+                                event.preventDefault()
+                                const button = $(this)
+                                const status = tab_content.find('.va-role-lookup-clear-cache-status')
+                                button.prop('disabled', true)
+                                status.text('正在清除...')
+                                try {
+                                    await clear_local_cache()
+                                    status.text('已清除')
+                                } catch (error) {
+                                    status.text(`清除失败：${error.message || error}`)
+                                } finally {
+                                    button.prop('disabled', false)
+                                }
+                            })
+                        },
+                    })
+                }
             } else if (attempts < 10) {
                 attempts++
                 setTimeout(try_register, 500)
@@ -1322,7 +1503,11 @@
             .va-role-lookup-production-group { min-width:0; display:flex; flex-direction:column; gap:4px; }
             .va-role-lookup-production-title { display:block; color:#555; font-weight:700; padding:0 9px 2px; }
             .va-role-lookup-production-empty { color:#aaa; padding:5px 9px; }
-            .va-role-lookup-right { min-width:0; max-height:360px; overflow:auto; padding-left:6px; box-sizing:border-box; }
+            .va-role-lookup-right { position:relative; min-width:0; max-height:360px; overflow:auto; padding-left:6px; box-sizing:border-box; }
+            .va-role-lookup-person-profile-link { position:sticky; top:0; z-index:4; display:none; align-items:center; justify-content:center; width:28px; height:28px; margin:0 0 -28px auto; border:1px solid rgba(127,127,127,.3); border-radius:999px; background:rgba(255,255,255,.94); color:#c45; box-sizing:border-box; text-decoration:none; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+            .va-role-lookup-panel.is-production-mode .va-role-lookup-person-profile-link[href] { display:flex; }
+            .va-role-lookup-person-profile-link:hover, .va-role-lookup-person-profile-link:focus { border-color:#c45; background:#fff; color:#d64a76; outline:none; }
+            .va-role-lookup-person-profile-link svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
             .va-role-lookup-hint, .va-role-lookup-empty, .va-role-lookup-loading, .va-role-lookup-error { min-height:88px; display:flex; align-items:center; justify-content:center; color:#888; text-align:center; }
             .va-role-lookup-error { flex-direction:column; gap:8px; }
             .va-role-lookup-error p { margin:0; }
@@ -1331,6 +1516,9 @@
             .va-role-lookup-result-section { margin-bottom:14px; }
             .va-role-lookup-result-section:last-child { margin-bottom:0; }
             .va-role-lookup-result-title { margin:0 0 8px; padding-bottom:4px; border-bottom:1px solid rgba(127,127,127,.24); color:#555; font-size:13px; line-height:1.3; }
+            .va-role-lookup-actor-title { position:sticky; top:0; z-index:2; display:block; box-sizing:border-box; padding:6px 0 8px; border:0; background:rgba(255,255,255,.96); color:#c45; font-weight:700; overflow:hidden; white-space:nowrap; }
+            .va-role-lookup-actor-link { display:block; width:max-content; max-width:100%; box-sizing:border-box; padding:6px 12px; border-radius:999px; background:rgba(255,128,160,.9); color:inherit; font-size:13px; line-height:1.3; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            .va-role-lookup-actor-link:hover, .va-role-lookup-actor-link:focus { background:rgba(255,128,160,1); color:#fff; outline:none; }
             .va-role-lookup-role-group { margin:0 0 12px; }
             .va-role-lookup-role-group:last-child { margin-bottom:0; }
             .va-role-lookup-role-group-title { margin:0 0 8px; color:#666; font-size:12px; font-weight:700; line-height:1.3; cursor:default; }
@@ -1353,6 +1541,11 @@
             html[data-theme=dark] .va-role-lookup-panel { background:rgba(42,42,42,.82); border-color:#555; }
             html[data-theme=dark] .va-role-lookup-left { border-right-color:#555; }
             html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title, html[data-theme=dark] .va-role-lookup-role-group-title { color:#ddd; }
+            html[data-theme=dark] .va-role-lookup-actor-title { background:rgba(42,42,42,.96); color:#ff9ab3; }
+            html[data-theme=dark] .va-role-lookup-person-profile-link { background:rgba(42,42,42,.94); color:#ff9ab3; border-color:#666; }
+            html[data-theme=dark] .va-role-lookup-person-profile-link:hover, html[data-theme=dark] .va-role-lookup-person-profile-link:focus { background:#333; border-color:#ff9ab3; }
+            html[data-theme=dark] .va-role-lookup-actor-link { background:rgba(255,128,160,.18); }
+            html[data-theme=dark] .va-role-lookup-actor-link:hover, html[data-theme=dark] .va-role-lookup-actor-link:focus { background:rgba(255,128,160,.32); color:#fff; }
             html[data-theme=dark] .va-role-lookup-role-name { color:#ddd; }
             html[data-theme=dark] .va-role-lookup-card.is-spoiler-hidden .va-role-lookup-role-name, html[data-theme=dark] .va-role-lookup-card.is-spoiler-hidden:hover .va-role-lookup-role-name { color:#aaa; }
             html[data-theme=dark] .va-role-lookup-important-toggle { background:rgba(42,42,42,.92); border-color:#666; }
@@ -1388,6 +1581,9 @@
             <div class="va-role-lookup-panel" aria-label="角色替身面板">
                 <div class="va-role-lookup-left"></div>
                 <div class="va-role-lookup-right">
+                    <a class="va-role-lookup-person-profile-link">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14 21 3m0 0h-7m7 0v7M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+                    </a>
                     <div class="va-role-lookup-result"><div class="va-role-lookup-hint">点击左侧角色后开始加载。</div></div>
                 </div>
             </div>
@@ -1423,23 +1619,24 @@
     }
 
     async function init() {
-        try {
-            const subject = await get_subject(state.subject_id)
-            state.subject_type = Number(subject.type)
-        } catch (error) {
-            state.subject_type = 0
+        state.subject_type = subject_type_from_page()
+        if (!state.subject_type) {
+            try {
+                const subject = await get_subject(state.subject_id)
+                state.subject_type = Number(subject.type)
+            } catch (error) {
+                state.subject_type = 0
+            }
         }
         const character_section = find_character_section()
         const section = character_section || find_subject_panel_host()
         if (!section) return
-        const { actors, characters, current_character_actors } = character_section
-            ? read_actors(character_section)
-            : { actors: [], characters: [], current_character_actors: new Map() }
+        const { actors, characters, current_character_actors } = await read_subject_characters(character_section)
         if (state.subject_type === 1) {
             actors.length = 0
             characters.length = 0
         }
-        if (!characters.length && ![1, 4].includes(state.subject_type)) return
+        if (!SUBJECT_TYPES.includes(state.subject_type)) return
         for (const actor of actors) state.actor_by_id.set(actor.id, actor)
         state.current_character_actors = current_character_actors
         seed_current_character_actor_names(current_character_actors)
