@@ -2666,7 +2666,6 @@
                     border-radius: 4px;
                     display: block;
                 }
-                .鉴定_page ._compact_card.__important > img { outline: 4px solid #f2b705; outline-offset: -4px; }
                 .鉴定_page ._compact_card.__section_muted { opacity: 0.5; }
                 .鉴定_page ._compact_card.__section_muted:hover { opacity: 0.72; }
                 .rule-section-header { grid-column:1/-1;display:flex;align-items:baseline;gap:8px;width:100%;padding-top:8px;border-top:1px dashed #bbb; }
