@@ -131,15 +131,6 @@
             return { username, nickname }
         }
 
-        function update_shortcut_tooltips() {
-            document.querySelectorAll('.shadow-post-shortcut-link').forEach(link => {
-                const opponent_nickname = link.dataset.opponentNickname || link.dataset.opponentUsername || '对方'
-                const tooltip = `用 Shadow 对比我和${opponent_nickname}`
-                link.dataset.shadowTooltip = tooltip
-                link.setAttribute('aria-label', tooltip)
-            })
-        }
-
         function open_shadow_tab(target_href, link) {
             const opened = window.open('about:blank', '_blank')
             if (!opened) {
@@ -210,6 +201,9 @@
             link.className = 'shadow-post-shortcut-link'
             link.dataset.opponentUsername = username
             link.dataset.opponentNickname = nickname
+            const tooltip = `用 Shadow 对比我和${nickname || username}`
+            link.dataset.shadowTooltip = tooltip
+            link.setAttribute('aria-label', tooltip)
             link.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor"/><path d="M8 1.5a6.5 6.5 0 0 0 0 13z" fill="currentColor"/></svg>'
             link.addEventListener('click', event => {
                 event.preventDefault()
@@ -223,7 +217,6 @@
             const floor_info = actions.querySelector(':scope > .action')
             if (floor_info) floor_info.after(action)
             else actions.prepend(action)
-            update_shortcut_tooltips()
         }
 
         function inject_all_shortcuts(root = document) {
@@ -245,19 +238,39 @@
             }.shadow-post-action .shadow-post-shortcut-link:hover::after { display:block; }`
             document.head.append(style)
             inject_all_shortcuts()
-            ;[250, 1000, 3000].forEach(delay => setTimeout(() => inject_all_shortcuts(), delay))
             window.addEventListener('shadow-post-shortcut-setting-change', event => {
                 if (event.detail === 'off') document.querySelectorAll('.shadow-post-action').forEach(action => action.remove())
                 else inject_all_shortcuts()
             })
+            const pending_floors = new Set()
             let scheduled = false
+
+            function collect_affected_floors(node) {
+                if (!(node instanceof Element)) return
+                const shortcut_action = node.matches('.shadow-post-action')
+                    ? node
+                    : node.closest('.shadow-post-action')
+                if (shortcut_action?.dataset.shadowOwner === SHADOW_INSTANCE_ID) return
+
+                if (node.matches(FLOOR_SELECTOR)) pending_floors.add(node)
+                else {
+                    const parent_floor = node.closest(FLOOR_SELECTOR)
+                    if (parent_floor) pending_floors.add(parent_floor)
+                }
+                node.querySelectorAll(FLOOR_SELECTOR).forEach(floor => pending_floors.add(floor))
+            }
+
             const observer = new MutationObserver(mutations => {
-                if (!mutations.some(mutation => mutation.addedNodes.length)) return
-                if (scheduled) return
+                mutations.forEach(mutation => mutation.addedNodes.forEach(collect_affected_floors))
+                if (scheduled || !pending_floors.size) return
                 scheduled = true
                 requestAnimationFrame(() => {
                     scheduled = false
-                    inject_all_shortcuts()
+                    const floors = [...pending_floors]
+                    pending_floors.clear()
+                    floors.forEach(floor => {
+                        if (floor.isConnected) inject_floor_shortcut(floor)
+                    })
                 })
             })
             observer.observe(document.body, { childList: true, subtree: true })
@@ -1442,6 +1455,9 @@
     // ─── IndexedDB 缓存层 ───
 
     const api_cache = (() => {
+        const DB = 'bangumi_api_cache_5445_v1'
+        let db_promise = null
+
         function pr(req) {
             return new Promise((resolve, reject) => {
                 req.onsuccess = () => resolve(req.result)
@@ -1449,14 +1465,28 @@
             })
         }
 
-        async function open_db() {
-            const DB = 'bangumi_api_cache_5445_v1'
+        function open_db() {
+            if (db_promise) return db_promise
             const req = indexedDB.open(DB)
             req.onupgradeneeded = () => {
                 const db = req.result
                 store.create(db)
             }
-            return pr(req)
+            db_promise = new Promise((resolve, reject) => {
+                req.onsuccess = () => {
+                    const db = req.result
+                    db.onversionchange = () => {
+                        db.close()
+                        db_promise = null
+                    }
+                    resolve(db)
+                }
+                req.onerror = () => {
+                    db_promise = null
+                    reject(req.error)
+                }
+            })
+            return db_promise
         }
 
         const store = (() => {
@@ -1471,9 +1501,7 @@
             async function get(key) {
                 const db = await open_db()
                 const store = db.transaction(STORE).objectStore(STORE)
-                const value = await pr(store.get(key))
-                db.close()
-                return value
+                return pr(store.get(key))
             }
 
             async function set(key, value) {
@@ -1481,9 +1509,9 @@
                 return new Promise((resolve, reject) => {
                     const transaction = db.transaction(STORE, 'readwrite')
                     transaction.objectStore(STORE).put(value, key)
-                    transaction.oncomplete = () => { db.close(); resolve() }
-                    transaction.onerror = () => { db.close(); reject(transaction.error) }
-                    transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存写入事务已中止')) }
+                    transaction.oncomplete = () => resolve()
+                    transaction.onerror = () => reject(transaction.error)
+                    transaction.onabort = () => reject(transaction.error || new Error('缓存写入事务已中止'))
                 })
             }
 
@@ -1493,8 +1521,8 @@
                     const transaction = db.transaction(STORE, 'readwrite')
                     const store = transaction.objectStore(STORE)
                     const request = store.delete(key)
-                    request.onsuccess = () => { db.close(); resolve() }
-                    request.onerror = (event) => { db.close(); reject(event.target.error) }
+                    request.onsuccess = () => resolve()
+                    request.onerror = event => reject(event.target.error)
                 })
             }
 
@@ -1503,58 +1531,39 @@
                 return new Promise((resolve, reject) => {
                     const transaction = db.transaction(STORE, 'readwrite')
                     transaction.objectStore(STORE).clear()
-                    transaction.oncomplete = () => { db.close(); resolve() }
-                    transaction.onerror = () => { db.close(); reject(transaction.error) }
-                    transaction.onabort = () => { db.close(); reject(transaction.error || new Error('缓存清理事务已中止')) }
+                    transaction.oncomplete = () => resolve()
+                    transaction.onerror = () => reject(transaction.error)
+                    transaction.onabort = () => reject(transaction.error || new Error('缓存清理事务已中止'))
                 })
             }
 
-            async function getAllUsers() {
+            async function getUsersWithCachedCollections() {
                 const db = await open_db()
-                return new Promise((resolve, reject) => {
-                    const users = []
-                    const request = db.transaction(STORE, 'readonly').objectStore(STORE).openCursor()
-                    request.onsuccess = event => {
-                        const cursor = event.target.result
-                        if (!cursor) {
-                            db.close()
-                            resolve(users)
-                            return
-                        }
-                        const key = cursor.key
-                        if (typeof key === 'string' && /^https:\/\/api\.bgm\.tv\/v0\/users\/[^/?]+$/.test(key) && isValidUserPayload(cursor.value)) users.push(cursor.value)
-                        cursor.continue()
-                    }
-                    request.onerror = event => {
-                        db.close()
-                        reject(event.target.error)
-                    }
-                })
-            }
-
-            async function getCachedCollectionUsernames() {
-                const db = await open_db()
-                return new Promise((resolve, reject) => {
-                    const usernames = new Set()
+                const profile_keys = new Map()
+                const collection_usernames = new Set()
+                await new Promise((resolve, reject) => {
                     const request = db.transaction(STORE, 'readonly').objectStore(STORE).openKeyCursor()
                     request.onsuccess = event => {
                         const cursor = event.target.result
                         if (!cursor) {
-                            db.close()
-                            resolve(usernames)
+                            resolve()
                             return
                         }
                         if (typeof cursor.key === 'string') {
-                            const match = cursor.key.match(/^https:\/\/api\.bgm\.tv\/v0\/users\/([^/?]+)\/collections(?:\?|$)/)
-                            if (match) usernames.add(decodeURIComponent(match[1]))
+                            const profile_match = cursor.key.match(/^https:\/\/api\.bgm\.tv\/v0\/users\/([^/?]+)$/)
+                            const collection_match = cursor.key.match(/^https:\/\/api\.bgm\.tv\/v0\/users\/([^/?]+)\/collections(?:\?|$)/)
+                            if (profile_match) profile_keys.set(profile_match[1], cursor.key)
+                            else if (collection_match) collection_usernames.add(collection_match[1])
                         }
                         cursor.continue()
                     }
-                    request.onerror = event => {
-                        db.close()
-                        reject(event.target.error)
-                    }
+                    request.onerror = event => reject(event.target.error)
                 })
+                const profile_usernames = [...collection_usernames].filter(username => profile_keys.has(username))
+                if (!profile_usernames.length) return []
+                const object_store = db.transaction(STORE, 'readonly').objectStore(STORE)
+                const users = await Promise.all(profile_usernames.map(username => pr(object_store.get(profile_keys.get(username)))))
+                return users.filter(isValidUserPayload)
             }
 
             async function deleteUserCache(username) {
@@ -1570,8 +1579,8 @@
                         if (key === transUserKey(username) || key.startsWith(`${transUserKey(username)}/collections`)) cursor.delete()
                         cursor.continue()
                     }
-                    transaction.oncomplete = () => { db.close(); resolve() }
-                    transaction.onerror = () => { db.close(); reject(transaction.error) }
+                    transaction.oncomplete = () => resolve()
+                    transaction.onerror = () => reject(transaction.error)
                 })
             }
 
@@ -1589,7 +1598,7 @@
                 return `https://api.bgm.tv/v0/subjects/${subject_id}`
             }
 
-            return { create, get, set, deleteByKey, clearAllCache, deleteUserCache, getAllUsers, getCachedCollectionUsernames, transCollKey, transUserKey, transSubjectKey }
+            return { create, get, set, deleteByKey, clearAllCache, deleteUserCache, getUsersWithCachedCollections, transCollKey, transUserKey, transSubjectKey }
         })()
 
         return store
@@ -3402,13 +3411,13 @@
                 return `${username}|${rule.id}|${rule.updatedAt}|${cached_only ? 'cached' : 'live'}|${JSON.stringify(rule.subject_ids)}`
             }
 
-            async function calculate_friend_rule(rule, username = his_id, cached_only = false) {
+            async function calculate_friend_rule(rule, username = his_id, cached_only = false, cached_mine = null) {
                 const key = friend_rule_cache_key(rule, username, cached_only)
                 if (friend_result_cache.has(key)) return friend_result_cache.get(key)
                 const promise = (async () => {
                     if (cached_only) {
                         const [mine, his] = await Promise.all([
-                            load_manager_async.get_cached_coll(my_id, rule.subject_ids),
+                            cached_mine || load_manager_async.get_cached_coll(my_id, rule.subject_ids),
                             load_manager_async.get_cached_coll(username, rule.subject_ids),
                         ])
                         const missing = [...new Set([...mine.missingSubjectIds, ...his.missingSubjectIds])]
@@ -3782,18 +3791,17 @@
                     export_button.onclick = null
                 }
                 body.innerHTML = '<p>正在读取本地缓存…</p>'
-                const cached_users = await api_cache.getCachedCollectionUsernames()
-                const users = (await api_cache.getAllUsers()).filter(user => user.username !== my_id && cached_users.has(user.username))
+                const users = (await api_cache.getUsersWithCachedCollections()).filter(user => user.username !== my_id)
                 const rules = get_active_friend_rules()
                 const selected_rule = rules.find(rule => rule.id === friend_matrix_sort_rule_id) || get_default_friend_rule()
                 friend_matrix_sort_rule_id = selected_rule.id
-                const rows = []
-                for (const user of users) {
+                const cached_mine = await load_manager_async.get_cached_coll(my_id, selected_rule.subject_ids)
+                const rows = await map_with_concurrency(users, 4, async user => {
                     let cell
-                    try { cell = await calculate_friend_rule(selected_rule, user.username, true) }
+                    try { cell = await calculate_friend_rule(selected_rule, user.username, true, cached_mine) }
                     catch (error) { cell = { status:'pending', reason:String(error.message || error), sampleCount:0, confidence:0 } }
-                    rows.push({ user, cell })
-                }
+                    return { user, cell }
+                })
                 if (!body.isConnected || friend_workbench?.dataset.activeTab !== 'matrix') return
                 const recommended_mu = build_friend_matrix_recommended_mu(rows)
                 const shrinkage_mu = get_friend_matrix_shrinkage_mu()
@@ -3901,9 +3909,8 @@
                 if (!menu) return
                 menu.innerHTML = '<div style="padding:8px;color:#888">读取本地缓存...</div>'
                 try {
-                    const cached_collection_users = await api_cache.getCachedCollectionUsernames()
-                    const users = (await api_cache.getAllUsers())
-                        .filter(user => user.username !== self_username && cached_collection_users.has(user.username))
+                    const users = (await api_cache.getUsersWithCachedCollections())
+                        .filter(user => user.username !== self_username)
                         .sort((a, b) => {
                             const recent_diff = Number(recent_opponents[b.username] || 0) - Number(recent_opponents[a.username] || 0)
                             if (recent_diff !== 0) return recent_diff
@@ -4770,8 +4777,7 @@
                 const username = event.target.closest('[data-opponent-username]')?.dataset.opponentUsername
                 const bulk_button = event.target.closest('[data-cache-bulk-action]')
                 if (bulk_button) {
-                    const cached_collection_users = await api_cache.getCachedCollectionUsernames()
-                    const users = (await api_cache.getAllUsers()).filter(user => user.username !== self_username && cached_collection_users.has(user.username))
+                    const users = (await api_cache.getUsersWithCachedCollections()).filter(user => user.username !== self_username)
                     const stale_users = stale_cached_users(users)
                     if (!stale_users.length) return render_opponent_menu()
                     const progress = opponentMenu.querySelector('[data-cache-bulk-progress]')
