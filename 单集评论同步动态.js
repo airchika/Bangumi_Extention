@@ -56,7 +56,7 @@
     }
 
     function build_timeline_content(content, source_info) {
-        return `${content}\n（同步自「${source_info.subject_title}」${source_info.episode_number}）`
+        return `${content}\n ——同步自「${source_info.subject_title}」${source_info.episode_number}`
     }
 
     function add_style() {
