@@ -1523,7 +1523,7 @@
                         <a class="va-role-lookup-panel-action va-role-lookup-person-profile-link">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14 21 3m0 0h-7m7 0v7M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
                         </a>
-                        <button type="button" class="va-role-lookup-panel-action va-role-lookup-refresh" title="缓存默认每 12 小时过期自动刷新；点击立即刷新缓存" aria-label="立即刷新角色替身缓存">
+                        <button type="button" class="va-role-lookup-panel-action va-role-lookup-refresh" title="收藏缓存默认每 12 小时过期自动刷新；点击立即刷新缓存" aria-label="立即刷新角色替身缓存">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/></svg>
                         </button>
                     </div>
