@@ -18,7 +18,6 @@
     const CACHE_TTL = 12 * 60 * 60 * 1000
     const SUBJECT_TYPES = [1, 2, 3, 4]
     const ROLE_SUBJECT_TYPES = [2, 4]
-    const REFRESH_CONFIG_KEY = 'va_role_lookup_refresh_cache'
     const IMPORTANT_ROLES_CONFIG_KEY = 'va_role_lookup_important_roles_v1'
     const IMPORTANT_ROLES_LOCAL_KEY = 'bangumi_va_role_lookup_important_roles_v1'
     const NO_IMAGE = 'https://bgm.tv/img/info_only.png'
@@ -77,7 +76,6 @@
         selected_character_id: '',
         selected_production_key: '',
         request_serial: 0,
-        refresh_value: 'idle',
         status_text: '',
         important_roles: { version: 1, actors: {} },
         important_roles_loaded: false,
@@ -1328,22 +1326,37 @@
         set_status('角色替身本地缓存已清除')
     }
 
-    async function refresh_cache(force_status = true) {
+    async function refresh_cache() {
         const username = get_username()
-        if (!username) {
-            set_status('需要登录后才能刷新角色替身缓存')
-            return
-        }
-        if (force_status) set_status('正在刷新角色替身缓存...')
+        set_status('正在刷新角色替身缓存...')
+        state.request_serial++
         reset_runtime_cache()
-        await get_collections(true)
-        await cache.delete_prefix('person-characters:')
-        await cache.delete_prefix('character:')
-        await cache.delete_prefix('character-persons:')
-        await cache.delete_prefix('character-primary-persons:')
-        await cache.delete_prefix('subject-persons:')
-        await cache.delete_prefix('person-subjects:')
-        if (force_status) set_status('角色替身缓存已刷新')
+        await Promise.all([
+            cache.delete_prefix('person-characters:'),
+            cache.delete_prefix('character:'),
+            cache.delete_prefix('character-persons:'),
+            cache.delete_prefix('character-primary-persons:'),
+            cache.delete_prefix('subject-persons:'),
+            cache.delete_prefix('person-subjects:'),
+        ])
+        if (username) await get_collections(true)
+        set_status('角色替身缓存已刷新')
+    }
+
+    async function refresh_cache_from_button(button) {
+        if (button.disabled) return
+        button.disabled = true
+        button.classList.add('is-refreshing')
+        button.setAttribute('aria-busy', 'true')
+        try {
+            await refresh_cache()
+        } catch (error) {
+            set_status(`角色替身缓存刷新失败：${error.message || error}`)
+        } finally {
+            button.disabled = false
+            button.classList.remove('is-refreshing')
+            button.removeAttribute('aria-busy')
+        }
     }
 
     function clear_actor_role_names(actor_id) {
@@ -1363,65 +1376,37 @@
     function register_settings() {
         let attempts = 0
         const try_register = () => {
-            if (typeof chiiLib !== 'undefined' && chiiLib?.ukagaka?.addGeneralConfig) {
-                chiiLib.ukagaka.addGeneralConfig({
-                    title: '角色替身缓存',
-                    name: REFRESH_CONFIG_KEY,
-                    type: 'radio',
-                    defaultValue: 'idle',
-                    getCurrentValue: () => state.refresh_value,
-                    onChange: value => {
-                        state.refresh_value = value
-                        if (value !== 'refresh') return
-                        refresh_cache().catch(error => {
-                            set_status(`角色替身缓存刷新失败：${error.message || error}`)
-                        }).finally(() => {
-                            state.refresh_value = 'idle'
+            if (typeof chiiLib !== 'undefined' && chiiLib?.ukagaka?.addPanelTab) {
+                chiiLib.ukagaka.addPanelTab({
+                    tab: 'va_role_lookup',
+                    label: '角色替身',
+                    type: 'custom',
+                    customContent: () => `
+                        <div class="va-role-lookup-cache-settings">
+                            <h3>本地缓存</h3>
+                            <p>清除角色、人物、条目和收藏查询缓存；不会删除已标记角色等个性化设置。</p>
+                            <button type="button" class="btnBlue va-role-lookup-clear-cache">清除本地缓存</button>
+                            <span class="va-role-lookup-clear-cache-status" style="margin-left:8px"></span>
+                        </div>
+                    `,
+                    onInit: (tab_selector, tab_content) => {
+                        tab_content.off('click', '.va-role-lookup-clear-cache').on('click', '.va-role-lookup-clear-cache', async function (event) {
+                            event.preventDefault()
+                            const button = $(this)
+                            const status = tab_content.find('.va-role-lookup-clear-cache-status')
+                            button.prop('disabled', true)
+                            status.text('正在清除...')
                             try {
-                                if (typeof chiiApp !== 'undefined' && chiiApp?.cloud_settings) {
-                                    chiiApp.cloud_settings.update({ [REFRESH_CONFIG_KEY]: 'idle' })
-                                    chiiApp.cloud_settings.save()
-                                }
-                            } catch (error) { /* 个性化设置不可用时忽略 */ }
+                                await clear_local_cache()
+                                status.text('已清除')
+                            } catch (error) {
+                                status.text(`清除失败：${error.message || error}`)
+                            } finally {
+                                button.prop('disabled', false)
+                            }
                         })
                     },
-                    options: [
-                        { value: 'idle', label: '12H过期后刷新' },
-                        { value: 'refresh', label: '立即刷新' },
-                    ],
                 })
-                if (chiiLib.ukagaka.addPanelTab) {
-                    chiiLib.ukagaka.addPanelTab({
-                        tab: 'va_role_lookup',
-                        label: '角色替身',
-                        type: 'custom',
-                        customContent: () => `
-                            <div class="va-role-lookup-cache-settings">
-                                <h3>本地缓存</h3>
-                                <p>清除角色、人物、条目和收藏查询缓存；不会删除已标记角色等个性化设置。</p>
-                                <button type="button" class="btnBlue va-role-lookup-clear-cache">清除本地缓存</button>
-                                <span class="va-role-lookup-clear-cache-status" style="margin-left:8px"></span>
-                            </div>
-                        `,
-                        onInit: (tab_selector, tab_content) => {
-                            tab_content.off('click', '.va-role-lookup-clear-cache').on('click', '.va-role-lookup-clear-cache', async function (event) {
-                                event.preventDefault()
-                                const button = $(this)
-                                const status = tab_content.find('.va-role-lookup-clear-cache-status')
-                                button.prop('disabled', true)
-                                status.text('正在清除...')
-                                try {
-                                    await clear_local_cache()
-                                    status.text('已清除')
-                                } catch (error) {
-                                    status.text(`清除失败：${error.message || error}`)
-                                } finally {
-                                    button.prop('disabled', false)
-                                }
-                            })
-                        },
-                    })
-                }
             } else if (attempts < 10) {
                 attempts++
                 setTimeout(try_register, 500)
@@ -1435,11 +1420,11 @@
         const style = document.createElement('style')
         style.id = 'va-role-lookup-style'
         style.textContent = `
-            .va-role-lookup-toolbar { display:flex; align-items:center; gap:10px; margin:10px 0 8px; }
+            .va-role-lookup-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0 8px; }
             .va-role-lookup-toggle { border:1px solid #d8d8d8; border-radius:999px; background:#fff; color:#555; cursor:pointer; padding:5px 12px; line-height:1.2; }
             .va-role-lookup-toggle:hover { color:#000; border-color:#aaa; }
             .va-role-lookup-toggle.is-active { color:#c45; border-color:#e6a9ba; background:rgba(255,128,160,.14); }
-            .va-role-lookup-status { color:#888; font-size:12px; }
+            .va-role-lookup-status { flex:1 1 auto; min-width:100px; color:#888; font-size:12px; }
             .va-role-lookup-panel { display:none; grid-template-columns:minmax(120px, 170px) minmax(0, 1fr); gap:12px; margin:8px 0 12px; padding:10px; border:1px solid #ddd; border-radius:6px; background:rgba(255,255,255,.72); box-sizing:border-box; }
             .va-role-lookup-panel.is-open { display:grid; }
             .va-role-lookup-panel.is-production-mode { grid-template-columns:minmax(180px, 240px) minmax(0, 1fr); }
@@ -1451,10 +1436,18 @@
             .va-role-lookup-production-title { display:block; color:#555; font-weight:700; padding:0 9px 2px; }
             .va-role-lookup-production-empty { color:#aaa; padding:5px 9px; }
             .va-role-lookup-right { position:relative; min-width:0; max-height:360px; overflow:auto; padding-left:6px; box-sizing:border-box; }
-            .va-role-lookup-person-profile-link { position:sticky; top:0; z-index:4; display:none; align-items:center; justify-content:center; width:28px; height:28px; margin:0 0 -28px auto; border:1px solid rgba(127,127,127,.3); border-radius:999px; background:rgba(255,255,255,.94); color:#c45; box-sizing:border-box; text-decoration:none; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+            .va-role-lookup-panel-actions { position:sticky; top:6px; z-index:4; display:flex; justify-content:flex-end; gap:6px; height:28px; margin-bottom:-28px; pointer-events:none; }
+            .va-role-lookup-panel-action { pointer-events:auto; display:flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:1px solid rgba(127,127,127,.3); border-radius:999px; background:rgba(255,255,255,.94); color:#c45; box-sizing:border-box; cursor:pointer; text-decoration:none; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+            .va-role-lookup-panel-action:hover, .va-role-lookup-panel-action:focus { border-color:#c45; background:#fff; color:#d64a76; outline:none; }
+            .va-role-lookup-panel-action svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+            .va-role-lookup-refresh { color:#777; border-color:#bbb; }
+            .va-role-lookup-refresh:hover, .va-role-lookup-refresh:focus { color:#333; border-color:#888; }
+            .va-role-lookup-refresh.is-refreshing svg { animation:va-role-lookup-spin .8s linear infinite; }
+            .va-role-lookup-refresh:disabled { cursor:wait; opacity:.72; }
+            .va-role-lookup-person-profile-link { display:none; }
             .va-role-lookup-panel.is-production-mode .va-role-lookup-person-profile-link[href] { display:flex; }
-            .va-role-lookup-person-profile-link:hover, .va-role-lookup-person-profile-link:focus { border-color:#c45; background:#fff; color:#d64a76; outline:none; }
-            .va-role-lookup-person-profile-link svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+            .va-role-lookup-result { padding-top:0; }
+            .va-role-lookup-panel.is-production-mode .va-role-lookup-result { padding-top:34px; }
             .va-role-lookup-hint, .va-role-lookup-empty, .va-role-lookup-loading, .va-role-lookup-error { min-height:88px; display:flex; align-items:center; justify-content:center; color:#888; text-align:center; }
             .va-role-lookup-error { flex-direction:column; gap:8px; }
             .va-role-lookup-error p { margin:0; }
@@ -1463,7 +1456,7 @@
             .va-role-lookup-result-section { margin-bottom:14px; }
             .va-role-lookup-result-section:last-child { margin-bottom:0; }
             .va-role-lookup-result-title { margin:0 0 8px; padding-bottom:4px; border-bottom:1px solid rgba(127,127,127,.24); color:#555; font-size:13px; line-height:1.3; }
-            .va-role-lookup-actor-title { position:sticky; top:0; z-index:2; display:block; box-sizing:border-box; padding:6px 0 8px; border:0; background:rgba(255,255,255,.96); color:#c45; font-weight:700; overflow:hidden; white-space:nowrap; }
+            .va-role-lookup-actor-title { position:sticky; top:0; z-index:2; display:block; box-sizing:border-box; padding:6px 34px 8px 0; border:0; background:rgba(255,255,255,.96); color:#c45; font-weight:700; overflow:hidden; white-space:nowrap; }
             .va-role-lookup-actor-link { display:block; width:max-content; max-width:100%; box-sizing:border-box; padding:6px 12px; border-radius:999px; background:rgba(255,128,160,.9); color:inherit; font-size:13px; line-height:1.3; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             .va-role-lookup-actor-link:hover, .va-role-lookup-actor-link:focus { background:rgba(255,128,160,1); color:#fff; outline:none; }
             .va-role-lookup-role-group { margin:0 0 12px; }
@@ -1486,14 +1479,17 @@
             html[data-theme=dark] .va-role-lookup-left { border-right-color:#555; }
             html[data-theme=dark] .va-role-lookup-actor, html[data-theme=dark] .va-role-lookup-character, html[data-theme=dark] .va-role-lookup-person, html[data-theme=dark] .va-role-lookup-production-title, html[data-theme=dark] .va-role-lookup-result-title, html[data-theme=dark] .va-role-lookup-role-group-title { color:#ddd; }
             html[data-theme=dark] .va-role-lookup-actor-title { background:rgba(42,42,42,.96); color:#ff9ab3; }
-            html[data-theme=dark] .va-role-lookup-person-profile-link { background:rgba(42,42,42,.94); color:#ff9ab3; border-color:#666; }
-            html[data-theme=dark] .va-role-lookup-person-profile-link:hover, html[data-theme=dark] .va-role-lookup-person-profile-link:focus { background:#333; border-color:#ff9ab3; }
+            html[data-theme=dark] .va-role-lookup-panel-action { background:rgba(42,42,42,.94); color:#ff9ab3; border-color:#666; }
+            html[data-theme=dark] .va-role-lookup-panel-action:hover, html[data-theme=dark] .va-role-lookup-panel-action:focus { background:#333; border-color:#ff9ab3; }
+            html[data-theme=dark] .va-role-lookup-refresh { color:#bbb; border-color:#666; }
+            html[data-theme=dark] .va-role-lookup-refresh:hover, html[data-theme=dark] .va-role-lookup-refresh:focus { color:#eee; border-color:#999; }
             html[data-theme=dark] .va-role-lookup-actor-link { background:rgba(255,128,160,.18); }
             html[data-theme=dark] .va-role-lookup-actor-link:hover, html[data-theme=dark] .va-role-lookup-actor-link:focus { background:rgba(255,128,160,.32); color:#fff; }
             html[data-theme=dark] .va-role-lookup-role-name { color:#ddd; }
             html[data-theme=dark] .va-role-lookup-important-toggle { background:rgba(42,42,42,.92); border-color:#666; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="add"] { color:#ff9ab3; }
             html[data-theme=dark] .va-role-lookup-important-toggle[data-action="remove"] { color:#7eb0ff; }
+            @keyframes va-role-lookup-spin { to { transform:rotate(360deg); } }
             @media (max-width: 640px) {
                 .va-role-lookup-panel { grid-template-columns:1fr; }
                 .va-role-lookup-panel.is-production-mode { grid-template-columns:1fr; }
@@ -1523,9 +1519,14 @@
             <div class="va-role-lookup-panel" aria-label="角色替身面板">
                 <div class="va-role-lookup-left"></div>
                 <div class="va-role-lookup-right">
-                    <a class="va-role-lookup-person-profile-link">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14 21 3m0 0h-7m7 0v7M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
-                    </a>
+                    <div class="va-role-lookup-panel-actions">
+                        <a class="va-role-lookup-panel-action va-role-lookup-person-profile-link">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14 21 3m0 0h-7m7 0v7M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+                        </a>
+                        <button type="button" class="va-role-lookup-panel-action va-role-lookup-refresh" title="缓存默认每 12 小时过期自动刷新；点击立即刷新缓存" aria-label="立即刷新角色替身缓存">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/></svg>
+                        </button>
+                    </div>
                     <div class="va-role-lookup-result"><div class="va-role-lookup-hint">点击左侧角色后开始加载。</div></div>
                 </div>
             </div>
@@ -1546,6 +1547,9 @@
                 })
                 if (open) set_mode(panel, characters, next_mode)
             })
+        })
+        panel.querySelector('.va-role-lookup-refresh').addEventListener('click', event => {
+            refresh_cache_from_button(event.currentTarget)
         })
         const more = section.querySelector(':scope > a.more')
         host.append(toolbar, panel)
