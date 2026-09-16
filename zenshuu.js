@@ -2,7 +2,7 @@
 // @name         Bangumi 动态聚合按钮 全修
 // @homepage     https://bangumi.tv/dev/app/6542
 // @namespace    air.bgm.timeline.simple.combo
-// @version      0.2.4
+// @version      0.2.5
 // @description  聚合好友的吐槽、日志和有评论收藏；用户页仅聚合当前用户。
 // @author       Air + ChatGPT
 // @match        http*://bgm.tv/
@@ -49,6 +49,8 @@
     order: 0,
     items: [],
     seen: new Set(),
+    likesData: Object.create(null),
+    likesTemplate: null,
     lastErrors: [],
     page: {
       say: 1,
@@ -182,6 +184,8 @@
     state.order = 0;
     state.items = [];
     state.seen = new Set();
+    state.likesData = Object.create(null);
+    state.likesTemplate = null;
     state.lastErrors = [];
     state.page = {
       say: 1,
@@ -215,6 +219,10 @@
         attemptedPages += result.attemptedPages;
         successfulPages += result.successfulPages;
         if (result.error) state.lastErrors.push({ type: result.type, error: result.error });
+        mergeLikesData(state.likesData, result.likesData);
+        if (!state.likesTemplate && result.likesTemplate) {
+          state.likesTemplate = result.likesTemplate;
+        }
         for (const item of result.items) {
           if (item.type === 'subject' && !hasSubjectComment(item.li)) continue;
           addItem(item);
@@ -236,6 +244,8 @@
       items: [],
       attemptedPages: 0,
       successfulPages: 0,
+      likesData: Object.create(null),
+      likesTemplate: null,
       error: null,
     };
     for (let i = 0; i < count; i++) {
@@ -243,8 +253,12 @@
       if (page > MAX_PAGE[type]) break;
       result.attemptedPages += 1;
       try {
-        const items = await fetchTimelineItems(type, page);
-        result.items.push(...items);
+        const parsed = await fetchTimelineItems(type, page);
+        result.items.push(...parsed.items);
+        mergeLikesData(result.likesData, parsed.likesData);
+        if (!result.likesTemplate && parsed.likesTemplate) {
+          result.likesTemplate = parsed.likesTemplate;
+        }
         result.successfulPages += 1;
         state.page[type] += 1;
       } catch (error) {
@@ -296,6 +310,8 @@
 
     const timeline = temp.querySelector('#timeline') || temp;
     const items = [];
+    const likesData = parseLikesData(temp);
+    const likesTemplate = temp.querySelector('#likes_reaction_grid_item');
     let currentHeader = '';
 
     for (const child of Array.from(timeline.children)) {
@@ -321,7 +337,80 @@
       }
     }
 
-    return items;
+    return {
+      items,
+      likesData,
+      likesTemplate: likesTemplate ? likesTemplate.cloneNode(true) : null,
+    };
+  }
+
+  function parseLikesData(root) {
+    const likesData = Object.create(null);
+
+    // AJAX 片段把表情数据放在 #timeline 外的内联脚本中。
+    // 这里只读取赋值右侧的 JSON 字面量，不执行响应中的任何脚本。
+    for (const script of root.querySelectorAll('script:not([src])')) {
+      const source = script.textContent || '';
+      const assignment = source.match(/(?:^|[;\r\n])\s*(?:var|let|const)\s+data_likes_list\s*=/);
+      if (!assignment) continue;
+
+      try {
+        const value = parseJsonLiteral(source, assignment.index + assignment[0].length);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error('data_likes_list 不是对象');
+        }
+        mergeLikesData(likesData, value);
+      } catch (error) {
+        console.warn('[AirTimelineCombo] likes data parse failed:', error);
+      }
+    }
+
+    return likesData;
+  }
+
+  function parseJsonLiteral(source, startIndex) {
+    let start = startIndex;
+    while (/\s/.test(source[start] || '')) start += 1;
+
+    if (source[start] !== '{' && source[start] !== '[') {
+      throw new Error('找不到 JSON 起始位置');
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < source.length; i++) {
+      const char = source[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{' || char === '[') {
+        depth += 1;
+      } else if (char === '}' || char === ']') {
+        depth -= 1;
+        if (depth === 0) return JSON.parse(source.slice(start, i + 1));
+      }
+    }
+
+    throw new Error('JSON 数据不完整');
+  }
+
+  function mergeLikesData(target, source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+    for (const [relatedId, reactions] of Object.entries(source)) {
+      target[relatedId] = reactions;
+    }
   }
 
   function hasSubjectComment(li) {
@@ -337,6 +426,14 @@
   }
 
   function fingerprint(li, type) {
+    const likesGrid = li.querySelector('.likes_grid[id]');
+    if (likesGrid) {
+      return `reaction::${likesGrid.getAttribute('id').replace(/^likes_grid_/, '')}`;
+    }
+
+    const timelineId = li.getAttribute('id');
+    if (timelineId) return `timeline::${timelineId.replace(/^tml_/, '')}`;
+
     const links = Array.from(li.querySelectorAll('a[href]'))
       .slice(0, 5)
       .map((a) => a.getAttribute('href'))
@@ -471,10 +568,25 @@
     if (lastSubjectIndex === -1) appendPager(timeline);
 
     try {
+      prepareLikesData();
       window.chiiLib && window.chiiLib.tml && window.chiiLib.tml.prepareAjax && window.chiiLib.tml.prepareAjax();
     } catch (error) {
       console.warn('[AirTimelineCombo] prepareAjax failed:', error);
     }
+  }
+
+  function prepareLikesData() {
+    if (!document.querySelector('#likes_reaction_grid_item') && state.likesTemplate) {
+      document.body.appendChild(state.likesTemplate.cloneNode(true));
+    }
+
+    const merged = Object.create(null);
+    if (window.data_likes_list && typeof window.data_likes_list === 'object'
+      && !Array.isArray(window.data_likes_list)) {
+      mergeLikesData(merged, window.data_likes_list);
+    }
+    mergeLikesData(merged, state.likesData);
+    window.data_likes_list = merged;
   }
 
   function appendPager(timeline) {
