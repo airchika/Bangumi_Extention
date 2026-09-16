@@ -27,9 +27,6 @@
   const BTN_ID = 'air_timeline_combo_tab';
   const BTN_TEXT = '全修';
   const USER_TIMELINE_PATH = getUserTimelinePath();
-  const ACTIVE_STORAGE_KEY = USER_TIMELINE_PATH
-    ? `air_timeline_combo_active:${USER_TIMELINE_PATH}`
-    : 'air_timeline_combo_active';
 
   // 每次初始加载 / 再来点时抓取的页数。
   // 有评论收藏通常比吐槽、日志稀疏，所以收藏页多抓几页。
@@ -72,7 +69,6 @@
     injectStyle();
     insertButton(tabs);
     bindUnfocus(tabs);
-    restoreComboState();
   }
 
   function injectStyle() {
@@ -158,7 +154,6 @@
       const combo = document.querySelector('#' + BTN_ID);
       if (combo) combo.classList.remove('focus', 'air-timeline-combo-focus');
       state.active = false;
-      saveComboState(false);
     }, true);
   }
 
@@ -169,7 +164,6 @@
     if (state.loading) return;
 
     state.active = true;
-    saveComboState(true);
     resetState();
     focusComboTab();
     //加载全修动态中…
@@ -181,27 +175,6 @@
     } catch (error) {
       console.error('[AirTimelineCombo] load failed:', error);
       renderError('加载失败，可以刷新页面后重试。');
-    }
-  }
-
-  function saveComboState(active) {
-    try {
-      const value = active ? 'on' : 'off';
-      if (localStorage.getItem(ACTIVE_STORAGE_KEY) === value) return;
-      localStorage.setItem(ACTIVE_STORAGE_KEY, value);
-    } catch (error) {
-      console.warn('[AirTimelineCombo] local settings save failed:', error);
-    }
-  }
-
-  function restoreComboState() {
-    try {
-      if (localStorage.getItem(ACTIVE_STORAGE_KEY) === 'on') {
-        const combo = document.querySelector('#' + BTN_ID);
-        if (combo) combo.click();
-      }
-    } catch (error) {
-      console.warn('[AirTimelineCombo] local settings read failed:', error);
     }
   }
 
